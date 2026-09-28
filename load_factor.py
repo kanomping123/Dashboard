@@ -361,9 +361,13 @@ def _cptk_cell(value):
     return f'<td class="lfx-num">{float(value):,.2f}</td>'
 
 
+_NO_PRODUCT = {"ไม่เจอ", "ไม่พบ", "ไม่ระบุ", "ไม่มี", "-", "—", "n/a", "na", "nan", "none", "<na>", "#n/a"}
+
+
 def _product_mix(x, by):
     """ประเภทสินค้า 2 อันดับแรกของแต่ละกลุ่ม พร้อม % ของจำนวนเที่ยว"""
-    p = x[x["_Product"].ne("")]
+    # ไม่นับค่าที่ไม่ใช่ชื่อสินค้าจริง เช่น "ไม่เจอ" / "ไม่ระบุ" (% คิดจากเที่ยวที่ระบุสินค้าเท่านั้น)
+    p = x[x["_Product"].ne("") & ~x["_Product"].str.casefold().isin(_NO_PRODUCT)]
     if p.empty:
         return {}
     cnt = p.groupby([by, "_Product"])["Trip Key Unique"].nunique().reset_index(name="n")
@@ -750,7 +754,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             "vehicle", "10 อันดับ ชนิดรถ (เรียงตามจำนวนเที่ยว)", "Trip Vehicle Model", "ชนิดรถ",
             "lf3_vehicle_filter",
             "LF = ผลรวม ÷ ผลรวมความจุ (ไม่ใช่ค่าเฉลี่ยรายเที่ยว) · เลือกชนิดรถเพื่อดูเฉพาะคัน"
-            + (" · ประเภทสินค้าที่ขน = 2 อันดับแรก พร้อม % ของจำนวนเที่ยวของรถชนิดนั้น" if has_product else ""),
+            + (" · ประเภทสินค้าที่ขน = 2 อันดับแรก พร้อม % ของเที่ยวที่ระบุสินค้า" if has_product else ""),
         )
     with d2:
         with _card("route"):
