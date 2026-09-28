@@ -711,8 +711,7 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
                 "เลือกเที่ยว (ไม่เลือก = แสดงทั้งหมด)", table_routes,
                 placeholder="พิมพ์ชื่อสถานที่เพื่อค้นหา", key=_wkey("et_table_routes", table_routes),
             )
-        sort_opts = ["ต้นทุนสูญเสียรวม", "จำนวนเที่ยว"] + (
-            ["ราคาต่อเส้นทาง"] if has_price else []) + ["ชื่อเที่ยว"]
+        sort_opts = ["ต้นทุนสูญเสียรวม", "จำนวนเที่ยว", "ชื่อเที่ยว"]
         with s2:
             sort_label = st.selectbox("เรียงตาม", sort_opts, key=_wkey("et_table_sort", sort_opts))
         sort_by, asc = {
@@ -730,7 +729,7 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
         pair_order = pair_agg.sort_values(sort_by, ascending=asc, na_position="last").index.tolist()
 
         head = ["#", "ทิศทาง (ต้นทาง → ปลายทาง)", EMPTY, BRANCH,
-                "ต้นทุนสูญเสียรวม", "ต้นทุนเฉลี่ย/เที่ยว"] + (["ราคาต่อเส้นทาง"] if has_price else [])
+                "ต้นทุนสูญเสียรวม", "ต้นทุนเฉลี่ย/เที่ยว"]
         max_cost = float(valid["CostAll"].max() or 1)
         TAG_COLORS = {"ขาไป": "#E0566C", "ขากลับ": "#3B82B0"}
 
@@ -775,23 +774,18 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
                     f'background:{color}"></span></div></td>',
                     f'<td class="tc-num">{_money_full(r["AvgActual"])}</td>',
                 ]
-                if has_price:
-                    price_txt = _money_full(r["Price"]) if pd.notna(r["Price"]) else "—"
-                    cells.append(f'<td class="tc-num et-price">{price_txt}</td>')
                 body.append(f"<tr{tr_cls}>" + "".join(cells) + "</tr>")
                 export_rows.append({
                     "ลำดับ": rank, "ทิศ": tag, "เที่ยว (ต้นทาง → ปลายทาง)": r["_Route"],
                     f"{EMPTY} (เที่ยว)": r[f"Trips_{EMPTY}"], f"ต้นทุน{EMPTY}": r[f"Cost_{EMPTY}"],
                     f"{BRANCH} (เที่ยว)": r[f"Trips_{BRANCH}"], f"ต้นทุน{BRANCH}": r[f"Cost_{BRANCH}"],
                     "ต้นทุนสูญเสียรวม": r["CostAll"], "ต้นทุนเฉลี่ยต่อเที่ยว": round(r["AvgActual"], 2),
-                    **({"ราคาต่อเส้นทาง": r["Price"]} if has_price else {}),
                 })
 
         st.caption(
             f"แสดง {len(pair_order):,} คู่สถานที่ · {n_dir_rows:,} ทิศทาง · "
             "แต่ละคู่แสดง 2 แถว: ขาไป (ทิศที่ต้นทุนสูงกว่า) และ ขากลับ · ทุกคอลัมน์เป็นค่าของทิศนั้นเท่านั้น · "
             "ต้นทุนเฉลี่ย/เที่ยว = ต้นทุนรวม ÷ จำนวนเที่ยวตามตัวกรอง"
-            + (" · ราคาต่อเส้นทาง มาจากไฟล์ (ไม่เปลี่ยนตามตัวกรอง)" if has_price else "")
         )
         st.markdown(_table_html(head, body, right_cols=set(range(2, len(head))), max_height=520),
                     unsafe_allow_html=True)
