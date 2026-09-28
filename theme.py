@@ -161,23 +161,14 @@ def _plotly_template() -> go.layout.Template:
 
 
 def _patch_streamlit():
-    """ให้ st.container(border=True) เป็นการ์ดขาว, กราฟใช้ชุดสีของธีม
-    และจดเนื้อหาของหน้านี้ไว้ส่งออกเป็น HTML"""
-    st._nss_counter = itertools.count()
-    st._nss_export = []  # รีเซ็ตทุกครั้งที่สคริปต์รันใหม่
+    """ให้ st.container(border=True) เป็นการ์ดขาว และกราฟ Plotly ใช้ชุดสีของธีม"""
+    st._nss_counter = itertools.count()  # รีเซ็ตทุกครั้งที่หน้ารันใหม่ ให้ key คงที่
     if getattr(st, "_nss_patched", False):
         return
 
     orig_container = st.container
     orig_plotly = st.plotly_chart
-    orig_markdown = st.markdown
-    orig_caption = st.caption
     supports_key = "key" in inspect.signature(orig_container).parameters
-
-    def _rec(kind, payload):
-        buf = getattr(st, "_nss_export", None)
-        if buf is not None:
-            buf.append((kind, payload))
 
     def container(*args, **kwargs):
         if supports_key and kwargs.get("border") and not kwargs.get("key"):
@@ -188,26 +179,12 @@ def _patch_streamlit():
         return orig_container(*args, **kwargs)
 
     def plotly_chart(*args, **kwargs):
-        fig = args[0] if args else kwargs.get("figure_or_data")
-        if fig is not None:
-            _rec("chart", fig)
-        kwargs.setdefault("theme", None)
+        kwargs.setdefault("theme", None)          # ใช้สีของธีมนี้แทนสีมาตรฐาน Streamlit
         kwargs.setdefault("config", {"displayModeBar": False})
         return orig_plotly(*args, **kwargs)
 
-    def markdown(body="", *args, **kwargs):
-        unsafe = kwargs.get("unsafe_allow_html", args[0] if args else False)
-        _rec("md", (str(body), bool(unsafe)))
-        return orig_markdown(body, *args, **kwargs)
-
-    def caption(body, *args, **kwargs):
-        _rec("caption", str(body))
-        return orig_caption(body, *args, **kwargs)
-
     st.container = container
     st.plotly_chart = plotly_chart
-    st.markdown = markdown
-    st.caption = caption
     st._nss_patched = True
 
 
