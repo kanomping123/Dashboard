@@ -523,6 +523,20 @@ def load_vehicle_performance_files(folder_signature):
         "Trip Volume Loadfactor": ["Trip Volume Loadfactor", "Trip Volume Load Factor"],
         "License Plate": ["License Plate", "Trip License Plate", "ทะเบียนรถ"],
         "Customer": ["Customer", "Trip Customer", "ลูกค้า"],
+        # สำหรับ Ton-km / Cost per ton-km และตารางรายเที่ยว
+        "Trip Run Type": ["Trip Run Type", "เที่ยววิ่ง", "Run Type"],
+        "Trip Distance": ["Trip Distance", "Distance", "Total Distance", "ระยะทาง",
+                          "Distance (km)", "ระยะทาง (กม.)", "KM"],
+        "Trip Total Cost": ["Trip Total Cost", "Total Cost", "ต้นทุนรวม", "รวมต้นทุน", "Trip Cost"],
+        "Trip Ton-km": ["Trip Ton-km", "Ton-km", "Ton km", "Tonkm", "Ton-KM", "Ton.km", "Ton*km",
+                        "ตัน-กม.", "ตัน-กม", "ตันกม", "ตัน-กิโลเมตร"],
+        "Trip Cost per Ton-km": ["Trip Cost per Ton-km", "Cost per ton-km", "Cost per Ton km",
+                                 "Cost/ton-km", "Cost/Ton km", "Cost/Ton/KM", "Cost/Ton-Km",
+                                 "Cost per ton km", "Cost/tkm", "ต้นทุนต่อตัน-กม.", "ต้นทุนต่อตัน-กม",
+                                 "ต้นทุน/ตัน-กม.", "ต้นทุน/ตัน/กม."],
+        "Trip Product Type": ["Trip Product Type", "Product Type", "ประเภทสินค้า", "Goods Type",
+                              "Product Group", "กลุ่มสินค้า", "Commodity", "Product",
+                              "Product Type Clean"],
     }
     norm_lookup = {norm(c): c for c in df.columns}
     for canonical, names in exact_extra.items():

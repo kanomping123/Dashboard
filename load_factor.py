@@ -132,6 +132,30 @@ PAGE_CSS = """
             font-size: 12.5px; color: #6B4A51; line-height: 1.6; margin-top: 10px; }
 .lfx-source { font-size: 12px; color: #94A3B8; margin: 8px 4px 20px; }
 
+/* ต้นทุนต่อตัน-กม. */
+.lfx-ud-cell { min-width: 150px; }
+.lfx-ud { display: grid; grid-template-columns: 44px 60px 34px; gap: 6px; align-items: center;
+          font-size: 11.5px; color: #64748B; line-height: 1.6; }
+.lfx-ud small { text-align: right; font-variant-numeric: tabular-nums; }
+.lfx-ud-bar { height: 5px; border-radius: 99px; background: #FBEBEE; overflow: hidden; }
+.lfx-ud-bar > span { display: block; height: 100%; border-radius: 99px; }
+.lfx-table tbody tr.lfx-picked td { background: #FFF1F4 !important; }
+.lfx-table tbody tr.lfx-picked td:first-child { box-shadow: inset 3px 0 0 #E8687C; }
+.lfx-cmp-grid { display: grid; gap: 10px; margin: 10px 0 8px; }
+.lfx-cmp { background: #fff; border: 1px solid #F4D8DE; border-radius: 14px; padding: 12px 14px; min-width: 0; }
+.lfx-cmp.good { border-color: #86CFA3; background: #F4FBF7; }
+.lfx-cmp.bad { border-color: #EC7F86; background: #FFF6F7; }
+.lfx-cmp-name { font-size: 13px; font-weight: 700; color: #0F172A; line-height: 1.4; margin-bottom: 6px; }
+.lfx-cmp-main small { display: block; font-size: 11.5px; color: #64748B; }
+.lfx-cmp-main b { font-size: 22px; font-weight: 800; color: #0F172A; font-variant-numeric: tabular-nums; }
+.lfx-cmp-tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; margin-left: 6px; vertical-align: 4px; }
+.lfx-cmp-tag.good { background: #DDF3E6; color: #2F7D55; }
+.lfx-cmp-tag.bad { background: #FDE2E5; color: #C23B53; }
+.lfx-cmp-diff { font-size: 11.5px; color: #C23B53; margin-top: 2px; }
+.lfx-cmp-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: #64748B;
+               padding: 4px 0; border-top: 1px dashed #F4E4E7; margin-top: 4px; }
+.lfx-cmp-row b { color: #1E293B; font-variant-numeric: tabular-nums; }
+
 @media (max-width: 1100px) {
   .lfx-kpi-grid.sub { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .lfx-ins-grid { grid-template-columns: 1fr; }
@@ -341,6 +365,245 @@ def _level_table(filtered, by, label, top_rank):
 
 
 # =========================================================
+# ต้นทุนต่อตัน-กม. (Cost per ton-km): รายเที่ยว + สรุปรายเส้นทาง + เปรียบเทียบ
+# =========================================================
+
+UP_DOWN_COLORS = ("#E8687C", "#7CC4D6")  # ขาขึ้น / ขาล่อง (หรือ ทิศหลัก / อีกทิศ)
+RUN_TAG_COLORS = {"ขาขึ้น": "#E0566C", "ขาล่อง": "#3B82B0", "รถว่างไปสาขา": "#B07A2A", "ยกเลิก": "#64748B"}
+
+
+def _run_tag(text):
+    text = str(text or "").strip() or "ไม่ระบุ"
+    c = RUN_TAG_COLORS.get(text, "#64748B")
+    return (f'<span class="lfx-badge" style="background:{_tint(c, 0.86)};color:{c}">'
+            f'{esc(text)}</span>')
+
+
+def _num_cell(value, decimals=0):
+    if value is None or pd.isna(value):
+        return '<td class="lfx-num lfx-muted">—</td>'
+    return f'<td class="lfx-num">{float(value):,.{decimals}f}</td>'
+
+
+def _route_cost_summary(x, has_run_type):
+    """สรุปรายเส้นทาง: LF = ผลรวม ÷ ผลรวมความจุ, Cost/ton-km = ต้นทุนรวม ÷ ton-km รวม
+    (นับเฉพาะเที่ยวที่มีทั้งต้นทุนและ ton-km เพื่อไม่ให้ตัวหารเพี้ยน)"""
+    # Cost/ton-km รายเส้นทาง = ถัวเฉลี่ยค่า Cost/ton-km ของแต่ละเที่ยว (จากไฟล์) ถ่วงด้วย Ton-km
+    # = ต้นทุนรวม ÷ Ton-km รวม ; ถ้าไม่มี Ton-km เลย ใช้ค่าเฉลี่ยธรรมดาของ Cost/ton-km รายเที่ยว
+    both = x["_CostPerTK"].notna() & x["_TonKm"].notna()
+    x = x.assign(
+        _CostV=(x["_CostPerTK"] * x["_TonKm"]).where(both),
+        _TKV=x["_TonKm"].where(both),
+    )
+    if has_run_type:
+        run = x["Trip Run Type"].astype("string").fillna("").str.strip()
+        x = x.assign(_A=run.eq("ขาขึ้น").astype(int), _B=run.eq("ขาล่อง").astype(int))
+    else:
+        # ไม่มีคอลัมน์เที่ยววิ่ง: ใช้ทิศที่วิ่งบ่อยที่สุดของเส้นทางเป็น "ทิศหลัก"
+        dir_n = x.groupby(["_LFRoute", "_LFDir"])["Trip Key Unique"].transform("nunique")
+        top_dir = (x.assign(_n=dir_n).sort_values("_n", ascending=False)
+                   .drop_duplicates("_LFRoute").set_index("_LFRoute")["_LFDir"])
+        is_main = x["_LFDir"].eq(x["_LFRoute"].map(top_dir))
+        x = x.assign(_A=is_main.astype(int), _B=(~is_main).astype(int))
+
+    rs = (
+        x.groupby("_LFRoute")
+        .agg(
+            Trips=("Trip Key Unique", "nunique"),
+            _Weight=("_Weight", "sum"), _Capacity=("_Capacity", "sum"),
+            _VolumeAgg=("_VolumeAgg", "sum"), _VolumeCapacityAgg=("_VolumeCapacityAgg", "sum"),
+            TonKm=("_TonKm", "sum"), Cost=("_Cost", "sum"),
+            _CostV=("_CostV", "sum"), _TKV=("_TKV", "sum"),
+            A=("_A", "sum"), B=("_B", "sum"),
+            _CPTKMean=("_CostPerTK", "mean"),
+        )
+        .reset_index()
+    )
+    rs["LF_W"] = rs["_Weight"].div(rs["_Capacity"].replace(0, float("nan")))
+    rs["LF_V"] = rs["_VolumeAgg"].div(rs["_VolumeCapacityAgg"].replace(0, float("nan")))
+    rs["CPTK"] = rs["_CostV"].div(rs["_TKV"].replace(0, float("nan"))).fillna(rs["_CPTKMean"])
+    rs["TonKm"] = rs["TonKm"].where(rs["TonKm"] > 0)
+
+    prod = x[x["_Product"].ne("")]
+    if not prod.empty:
+        top_prod = (prod.groupby(["_LFRoute", "_Product"]).size().reset_index(name="n")
+                    .sort_values(["_LFRoute", "n"], ascending=[True, False])
+                    .drop_duplicates("_LFRoute").set_index("_LFRoute")["_Product"])
+        rs["Product"] = rs["_LFRoute"].map(top_prod).fillna("")
+    else:
+        rs["Product"] = ""
+    return rs.sort_values("Trips", ascending=False).reset_index(drop=True)
+
+
+def _split_cell(a, b, labels):
+    total = (a + b) or 1
+    rows = ""
+    for lab, n, c in zip(labels, (a, b), UP_DOWN_COLORS):
+        pct = n / total * 100
+        rows += (f'<div class="lfx-ud"><span>{lab}</span><span class="lfx-ud-bar">'
+                 f'<span style="width:{pct:.0f}%;background:{c}"></span></span><small>{pct:.0f}%</small></div>')
+    return f'<td class="lfx-ud-cell">{rows}</td>'
+
+
+def _render_cost_section(filtered, has_run_type):
+    has_cost = filtered["_CostPerTK"].notna().any() or filtered["_Cost"].notna().any()
+    has_product = filtered["_Product"].ne("").any()
+    split_labels = ("ขาขึ้น", "ขาล่อง") if has_run_type else ("ทิศหลัก", "อีกทิศ")
+
+    if not has_cost:
+        st.info("ไม่พบคอลัมน์ Cost per ton-km / Trip Total Cost ในไฟล์ Load Factor — "
+                "คอลัมน์ Total Cost และ Cost/ton-km จะแสดงเป็น —")
+
+    rs_all = _route_cost_summary(filtered, has_run_type)
+    route_opts = rs_all["_LFRoute"].tolist()
+    cmp_key = _wkey("lf3_cost_compare", route_opts)
+
+    left, right = st.columns([1.12, 1], gap="medium")
+
+    # ---------- ขวา: สรุปรายเส้นทาง + ปุ่มเปรียบเทียบ (วาดก่อน เพื่อให้ตารางซ้ายกรองตามได้) ----------
+    with right:
+        with _card("cost_routes"):
+            n_pick = len(st.session_state.get(cmp_key, []) or [])
+            h1, h2 = st.columns([1.5, 1], vertical_alignment="center")
+            with h1:
+                st.markdown("#### สรุปรวมรายเส้นทาง (ไม่ใช่รายเที่ยว)")
+            with h2:
+                with st.popover(f"⚖️ เปรียบเทียบเส้นทาง ({n_pick} เส้นทาง)", use_container_width=True):
+                    compare = st.multiselect(
+                        "เลือก 2–4 เส้นทางเพื่อเปรียบเทียบ", route_opts, max_selections=4,
+                        placeholder="พิมพ์ชื่อสถานที่เพื่อค้นหา", key=cmp_key,
+                    )
+            st.caption("สรุปภาพรวมแต่ละเส้นทาง (Route) พร้อมสัดส่วน" + "/".join(split_labels)
+                       + " ประเภทสินค้าหลัก และต้นทุน")
+
+            head = ["#", "เส้นทาง", "จำนวนเที่ยว", "สัดส่วน" + "/".join(split_labels),
+                    "LF น้ำหนัก", "LF ปริมาตร"]
+            if has_product:
+                head.append("สินค้าหลัก")
+            head.append("Cost/ton-km")
+            body = []
+            for i, r in enumerate(rs_all.head(300).to_dict("records"), 1):
+                picked = ' class="lfx-picked"' if r["_LFRoute"] in compare else ""
+                cells = [
+                    f'<td class="lfx-rank">{i}</td>',
+                    f'<td><b>{esc(r["_LFRoute"])}</b></td>',
+                    f'<td class="lfx-num">{int(r["Trips"]):,}</td>',
+                    _split_cell(int(r["A"]), int(r["B"]), split_labels),
+                    _lf_cell(r["LF_W"]), _lf_cell(r["LF_V"]),
+                ]
+                if has_product:
+                    cells.append(f'<td class="lfx-muted">{esc(r["Product"] or "—")}</td>')
+                cells.append(_num_cell(r["CPTK"], 2))
+                body.append(f"<tr{picked}>" + "".join(cells) + "</tr>")
+            right_cols = {2, 4, 5, len(head) - 1}
+            st.markdown(_table_html(head, body, right_cols=right_cols, max_height=460),
+                        unsafe_allow_html=True)
+            st.caption("LF = ผลรวม ÷ ผลรวมความจุ · Cost/ton-km รายเที่ยว = ค่าจากไฟล์ · "
+                       "รายเส้นทาง = ต้นทุนรวม ÷ ton-km รวมของเส้นทาง")
+
+            if len(compare) >= 2:
+                cmp = rs_all.set_index("_LFRoute").loc[compare].reset_index()
+                valid = cmp["CPTK"].dropna()
+                best = valid.min() if not valid.empty else None
+                worst = valid.max() if len(valid) > 1 else None
+                cards = []
+                for r in cmp.to_dict("records"):
+                    v = r["CPTK"]
+                    tag, cls = "", ""
+                    if best is not None and pd.notna(v) and v == best:
+                        tag, cls = '<span class="lfx-cmp-tag good">ต่ำสุด</span>', " good"
+                    elif worst is not None and pd.notna(v) and v == worst:
+                        tag, cls = '<span class="lfx-cmp-tag bad">สูงสุด</span>', " bad"
+                    diff = ""
+                    if best and pd.notna(v) and v != best:
+                        diff = f'<div class="lfx-cmp-diff">+{(v / best - 1) * 100:,.1f}% จากเส้นทางต่ำสุด</div>'
+                    rows = "".join(
+                        f'<div class="lfx-cmp-row"><span>{k}</span><b>{val}</b></div>'
+                        for k, val in (
+                            ("จำนวนเที่ยว", f'{int(r["Trips"]):,}'),
+                            ("LF น้ำหนัก", _fmt_pct(r["LF_W"])),
+                            ("LF ปริมาตร", _fmt_pct(r["LF_V"])),
+                            ("Total Cost", _fmt_amount(r["Cost"]) if r["Cost"] else "—"),
+                        )
+                    )
+                    cards.append(
+                        f'<div class="lfx-cmp{cls}"><div class="lfx-cmp-name">{esc(r["_LFRoute"])}</div>'
+                        f'<div class="lfx-cmp-main"><small>Cost/ton-km</small>'
+                        f'<b>{_fmt_amount(v, 2)}</b>{tag}</div>{diff}{rows}</div>'
+                    )
+                st.markdown(
+                    f'<div class="lfx-cmp-grid" style="grid-template-columns:repeat({len(cards)},minmax(0,1fr))">'
+                    + "".join(cards) + "</div>",
+                    unsafe_allow_html=True,
+                )
+            elif len(compare) == 1:
+                st.caption("เลือกอีกอย่างน้อย 1 เส้นทางเพื่อเปรียบเทียบ")
+
+    # ---------- ซ้าย: รายการเที่ยว (รายละเอียด) ----------
+    with left:
+        with _card("cost_trips"):
+            tx = filtered if not compare else filtered[filtered["_LFRoute"].isin(compare)]
+            export = pd.DataFrame({
+                "วันที่": tx["_TripDate"].dt.strftime("%d/%m/%Y"),
+                "เลขที่เที่ยว": tx["Trip Key Unique"],
+                "เส้นทางวิ่ง": tx["Trip Direction"],
+                **({"ทิศทางวิ่ง": tx["Trip Run Type"]} if has_run_type else {}),
+                "ชนิดรถ": tx["Trip Vehicle Model"],
+                **({"ประเภทสินค้า": tx["_Product"]} if has_product else {}),
+                "LF น้ำหนัก (%)": (tx["_WeightLF"].astype("float64") * 100).round(2),
+                "LF ปริมาตร (%)": (tx["_VolumeLF"].astype("float64") * 100).round(2),
+                "Total Cost": tx["_Cost"].astype("float64").round(2),
+                "Cost/ton-km": tx["_CostPerTK"].astype("float64").round(4),
+            })
+            h1, h2 = st.columns([1.5, 1], vertical_alignment="center")
+            with h1:
+                st.markdown("#### รายการเที่ยว (รายละเอียด)")
+            with h2:
+                st.download_button(
+                    f"⬇️ ดาวน์โหลด {len(tx):,} เที่ยว (CSV)",
+                    export.to_csv(index=False).encode("utf-8-sig"),
+                    file_name="load_factor_cost_trips.csv", mime="text/csv",
+                    key="lf3_dl_cost_trips", use_container_width=True,
+                )
+            st.caption("แสดงรายการเที่ยวแต่ละเที่ยว (Trip Key Unique) พร้อมข้อมูลเส้นทาง ชนิดรถ "
+                       "ประเภทสินค้า และต้นทุน"
+                       + (" · กรองเฉพาะเส้นทางที่เลือกเปรียบเทียบ" if compare else ""))
+
+            cols = [("#", False), ("วันที่", False), ("เลขที่เที่ยว", False), ("เส้นทางวิ่ง", False)]
+            if has_run_type:
+                cols.append(("ทิศทางวิ่ง", False))
+            cols.append(("ชนิดรถ", False))
+            if has_product:
+                cols.append(("ประเภทสินค้า", False))
+            cols += [("LF น้ำหนัก", True), ("LF ปริมาตร", True), ("Total Cost", True), ("Cost/ton-km", True)]
+            head = [c[0] for c in cols]
+
+            show = tx.sort_values("_TripDate", ascending=False, na_position="last").head(300)
+            body = []
+            for i, r in enumerate(show.to_dict("records"), 1):
+                date_txt = r["_TripDate"].strftime("%d/%m/%Y") if pd.notna(r["_TripDate"]) else "—"
+                direction = esc(str(r["Trip Direction"] or r["_LFDir"])).replace(" → ", ARROW)
+                cells = [
+                    f'<td class="lfx-rank">{i}</td>',
+                    f'<td class="lfx-muted">{date_txt}</td>',
+                    f'<td class="lfx-muted">{esc(str(r["Trip Key Unique"]))}</td>',
+                    f"<td>{direction}</td>",
+                ]
+                if has_run_type:
+                    cells.append(f"<td>{_run_tag(r.get('Trip Run Type'))}</td>")
+                cells.append(f'<td class="lfx-muted">{esc(str(r["Trip Vehicle Model"]))}</td>')
+                if has_product:
+                    cells.append(f'<td class="lfx-muted">{esc(r["_Product"] or "—")}</td>')
+                cells += [_lf_cell(r["_WeightLF"]), _lf_cell(r["_VolumeLF"]),
+                          _num_cell(r["_Cost"]), _num_cell(r["_CostPerTK"], 2)]
+                body.append("<tr>" + "".join(cells) + "</tr>")
+            right_cols = {i for i, c in enumerate(cols) if c[1]}
+            st.markdown(_table_html(head, body, right_cols=right_cols, max_height=460),
+                        unsafe_allow_html=True)
+            st.caption(f"{len(tx):,} เที่ยว · แสดงสูงสุด 300 เที่ยวล่าสุด")
+
+
+# =========================================================
 # DASHBOARD
 # =========================================================
 
@@ -390,6 +653,32 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
     df.loc[df["_VolumeOutlier"], "_VolumeStatus"] = "Check/Outlier"
     df["_VolumeAgg"] = df["_Volume"].where(~df["_VolumeOutlier"], 0.0)
     df["_VolumeCapacityAgg"] = df["_VolumeCapacity"].where(~df["_VolumeOutlier"], 0.0)
+
+    # ---------------- ต้นทุนต่อตัน-กม. (ใช้เมื่อไฟล์มีคอลัมน์ระยะทาง / Total Cost) ----------------
+    def _opt_num(col):
+        if col in df.columns:
+            return _num(df[col]).astype("float64")
+        return pd.Series(float("nan"), index=df.index)
+
+    df["_Distance"] = _opt_num("Trip Distance")
+    df["_Cost"] = _opt_num("Trip Total Cost")
+    # น้ำหนักในไฟล์เป็น กก. หรือ ตัน: ดูจากความจุรถ (ถ้าค่ากลาง > 100 ถือว่าเป็น กก.)
+    cap_med = pd.to_numeric(df["_Capacity"], errors="coerce").median()
+    ton_div = 1000.0 if pd.notna(cap_med) and cap_med > 100 else 1.0
+    tonkm = pd.to_numeric(df["_Weight"], errors="coerce").astype("float64") / ton_div * df["_Distance"]
+    # ใช้ค่า Ton-km / Cost per ton-km ที่คำนวณไว้แล้วในไฟล์ก่อน ถ้าไม่มีค่อยคำนวณเอง
+    if "Trip Ton-km" in df.columns:
+        tonkm = _opt_num("Trip Ton-km").fillna(tonkm)
+    df["_TonKm"] = tonkm.where(tonkm > 0)
+    calc_cptk = df["_Cost"] / df["_TonKm"]
+    if "Trip Cost per Ton-km" in df.columns:
+        df["_CostPerTK"] = _opt_num("Trip Cost per Ton-km").fillna(calc_cptk)
+    else:
+        df["_CostPerTK"] = calc_cptk
+    df["_Product"] = (df["Trip Product Type"].astype("string").fillna("").str.strip()
+                      if "Trip Product Type" in df.columns else "")
+    if "Trip Run Type" in df.columns:
+        df["Trip Run Type"] = df["Trip Run Type"].astype("string").fillna("").str.strip()
 
     for c in ["Trip Year", "Trip Vehicle Model", "Trip Loading", "Trip Unloading",
               "Route Key", "Trip Key Unique"]:
@@ -731,6 +1020,9 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 "จึงไม่เอาเที่ยวขาไปกับขากลับมาเฉลี่ย LF รวมกัน · LF = ผลรวม ÷ ผลรวมความจุของทิศทางนั้นเท่านั้น"
                 + (" · เที่ยววิ่ง = ค่าจากคอลัมน์ เที่ยววิ่ง ของไฟล์ต้นทาง" if has_run_type else "")
             )
+
+    # ---------------- ต้นทุนต่อตัน-กม.: รายเที่ยว (ซ้าย) + สรุป/เปรียบเทียบรายเส้นทาง (ขวา) ----------------
+    _render_cost_section(filtered, has_run_type)
 
     # ---------------- รายการเที่ยว (รายตัว ไม่ใช่รวมตามเส้นทาง) ----------------
     trip_status_color = {g: GROUP_COLORS[g] for g in ORDER}
