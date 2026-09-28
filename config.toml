@@ -1,0 +1,7 @@
+[theme]
+# ธีมสว่าง แดง-ขาวพาสเทล (บังคับโหมดสว่าง ไม่ให้ช่องกรอก/ช่องเลือกเป็นสีดำ)
+base = "light"
+primaryColor = "#E8687C"
+backgroundColor = "#FFF5F7"
+secondaryBackgroundColor = "#FFF1F4"
+textColor = "#1E293B"
