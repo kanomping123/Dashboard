@@ -28,7 +28,7 @@ ar_dashboard.py
 ส่วนสำหรับผู้บริหาร
 - สรุปอัตโนมัติ: ยอดค้าง/เกินกำหนด, NPL, การกระจุกตัว, ประสิทธิภาพการเก็บเงิน, เทียบเดือนก่อน
 - ต้องลงมือ: แบ่งลูกหนี้ตามความเร่งด่วน (เกิน 90 วัน / 31–90 วัน / 1–30 วัน / จ่ายช้าเป็นประจำ)
-- การกระจุกตัว (Pareto) และประมาณการค่าเผื่อหนี้สงสัยจะสูญ (ปรับอัตราได้)
+- การกระจุกตัวของยอดคงค้าง (Pareto)
 """
 
 import re
@@ -830,72 +830,42 @@ def render_ar_dashboard():
                         unsafe_allow_html=True,
                     )
 
-    # ---------------- การกระจุกตัว + ค่าเผื่อหนี้สงสัยจะสูญ ----------------
-    with _safe("การกระจุกตัว + ค่าเผื่อหนี้สงสัยจะสูญ"):
-        left, right = st.columns([1.2, 0.8], gap="medium")
-        with left:
-            with _card("ar_pareto"):
-                st.markdown("#### การกระจุกตัวของยอดคงค้าง (10 รายใหญ่)")
-                st.caption("แท่ง = ยอดคงค้างของลูกหนี้แต่ละราย · เส้น = % สะสมของยอดคงค้างทั้งหมด")
-                per = unpaid.groupby("Debtor")["Amount"].sum().sort_values(ascending=False)
-                if per.sum() <= 0:
-                    st.info("ไม่มียอดคงค้างตามตัวกรอง")
-                else:
-                    top = per.head(10)
-                    cum = top.cumsum() / per.sum() * 100
-                    names = [str(n) if len(str(n)) <= 22 else str(n)[:20] + "…" for n in top.index]
-                    cls = debtors.set_index("Debtor")["Class"].reindex(top.index).fillna(3).astype(int)
-                    fig = go.Figure()
-                    fig.add_trace(go.Bar(
-                        x=names, y=top.values, marker_color=[CLASS_COLORS[i] for i in cls], name="ยอดคงค้าง",
-                        customdata=[[str(n), CLASS_NAMES[i]] for n, i in zip(top.index, cls)],
-                        hovertemplate="%{customdata[0]}<br>฿%{y:,.0f}<br>%{customdata[1]}<extra></extra>",
-                    ))
-                    fig.add_trace(go.Scatter(
-                        x=names, y=cum.values, yaxis="y2", mode="lines+markers+text", name="% สะสม",
-                        line=dict(color="#7B5BB5", width=2.5), marker=dict(size=7),
-                        text=[f"{v:.0f}%" for v in cum.values], textposition="top center",
-                        textfont=dict(color="#7B5BB5", size=11),
-                        hovertemplate="สะสม %{y:.1f}%<extra></extra>",
-                    ))
-                    fig.update_layout(
-                        height=360, margin=dict(l=10, r=10, t=20, b=20), showlegend=False, bargap=0.3,
-                        xaxis=dict(title="", type="category", tickangle=-30),
-                        yaxis=dict(title="บาท", tickformat=",.0f"),
-                        yaxis2=dict(overlaying="y", side="right", range=[0, 110], ticksuffix="%", showgrid=False),
-                    )
-                    _style(fig)
-                    st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
-                    st.caption(f"สีแท่ง = ชั้นลูกหนี้ · ทั้งหมด {len(per):,} รายที่มียอดค้าง")
-
-        with right:
-            with _card("ar_provision"):
-                st.markdown("#### ประมาณการค่าเผื่อหนี้สงสัยจะสูญ")
-                st.caption("ยอดคงค้างแต่ละช่วงอายุ × อัตราตั้งสำรอง · อัตราตั้งต้นเป็นตัวอย่าง "
-                           "ควรใช้อัตราจากฝ่ายบัญชี (Provision Matrix)")
-                amt = unpaid.groupby("AgeIdx")["Amount"].sum().reindex(range(5), fill_value=0.0)
-                defaults = [0.0, 1.0, 5.0, 20.0, 50.0]
-                rates = []
-                with st.expander("⚙️ ปรับอัตราตั้งสำรอง (%)", expanded=False):
-                    cols = st.columns(5)
-                    for i, c in enumerate(cols):
-                        with c:
-                            rates.append(st.number_input(AGING_LABELS[i], min_value=0.0, max_value=100.0,
-                                                         value=defaults[i], step=1.0, key=f"ar2_prov_{i}") / 100)
-                prov = amt * pd.Series(rates, index=range(5))
-                total_prov = float(prov.sum())
-                st.markdown(
-                    f'<div style="font-size:30px;font-weight:800;color:#C23B53;margin:4px 0">{_money(total_prov)}</div>'
-                    f'<div style="font-size:12.5px;color:#64748B;margin-bottom:6px">'
-                    f'{(total_prov / outstanding * 100 if outstanding else 0):.1f}% ของยอดคงค้าง {_money(outstanding)}</div>'
-                    + "".join(
-                        f'<div class="ar-leg-row"><span class="sw" style="background:{AGING_COLORS[i]}"></span>'
-                        f'<div><div class="nm">{AGING_LABELS[i]}</div><div class="rule">อัตรา {rates[i] * 100:.0f}% '
-                        f'ของ {_money(amt[i])}</div></div><div class="val">{_money(prov[i])}</div></div>'
-                        for i in range(5)
-                    ),
-                    unsafe_allow_html=True,
+    # ---------------- การกระจุกตัว ----------------
+    with _safe("การกระจุกตัว"):
+        with _card("ar_pareto"):
+            st.markdown("#### การกระจุกตัวของยอดคงค้าง (10 รายใหญ่)")
+            st.caption("แท่ง = ยอดคงค้างของลูกหนี้แต่ละราย · เส้น = % สะสมของยอดคงค้างทั้งหมด")
+            per = unpaid.groupby("Debtor")["Amount"].sum().sort_values(ascending=False)
+            if per.sum() <= 0:
+                st.info("ไม่มียอดคงค้างตามตัวกรอง")
+            else:
+                top = per.head(10)
+                cum = top.cumsum() / per.sum() * 100
+                names = [str(n) if len(str(n)) <= 22 else str(n)[:20] + "…" for n in top.index]
+                cls = debtors.set_index("Debtor")["Class"].reindex(top.index).fillna(3).astype(int)
+                fig = go.Figure()
+                fig.add_trace(go.Bar(
+                    x=names, y=top.values, marker_color=[CLASS_COLORS[i] for i in cls], name="ยอดคงค้าง",
+                    customdata=[[str(n), CLASS_NAMES[i]] for n, i in zip(top.index, cls)],
+                    hovertemplate="%{customdata[0]}<br>฿%{y:,.0f}<br>%{customdata[1]}<extra></extra>",
+                ))
+                fig.add_trace(go.Scatter(
+                    x=names, y=cum.values, yaxis="y2", mode="lines+markers+text", name="% สะสม",
+                    line=dict(color="#7B5BB5", width=2.5), marker=dict(size=7),
+                    text=[f"{v:.0f}%" for v in cum.values], textposition="top center",
+                    textfont=dict(color="#7B5BB5", size=11),
+                    hovertemplate="สะสม %{y:.1f}%<extra></extra>",
+                ))
+                fig.update_layout(
+                    height=360, margin=dict(l=10, r=10, t=20, b=20), showlegend=False, bargap=0.3,
+                    xaxis=dict(title="", type="category", tickangle=-30),
+                    yaxis=dict(title="บาท", tickformat=",.0f"),
+                    yaxis2=dict(overlaying="y", side="right", range=[0, 110], ticksuffix="%", showgrid=False),
                 )
+                _style(fig)
+                st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+                st.caption(f"สีแท่ง = ชั้นลูกหนี้ · ทั้งหมด {len(per):,} รายที่มียอดค้าง")
+
 
     # ---------------- แนวโน้มรายเดือน ----------------
     with _safe("แนวโน้มรายเดือน"):
