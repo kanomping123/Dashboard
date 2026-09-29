@@ -19,6 +19,10 @@ direction_overview.py
     รถว่างไปสาขา · เที่ยวเปล่า (ของเหมาตีเปล่า/เที่ยวเปล่า) · ยกเลิก · นอกนั้น = เที่ยววิ่งปกติ
 - Load Factor ของกลุ่ม = น้ำหนักรวม ÷ ความจุรวม (นับแต่ละเที่ยวครั้งเดียว)
   ปริมาตร: ไม่นับเที่ยวที่ Volume LF > 150% (เหมือนหน้า Load Factor)
+- เกณฑ์ Load Factor (รายเที่ยว):
+    ผ่านเกณฑ์      = LF น้ำหนัก ≥ 75% หรือ LF ปริมาตร ≥ 75% อย่างใดอย่างหนึ่ง
+    กลุ่มที่ต้องสนใจ = ต่ำกว่า 75% ทั้งน้ำหนักและปริมาตร
+    (ค่าที่เกิน 100% ถือเป็นข้อมูลที่ต้องตรวจสอบ ไม่นำมาตัดสิน)
 - ต้นทุนต่อตัน-กม. = ต้นทุนของเที่ยวที่มีข้อมูล Load Factor ÷ Ton-km รวม
 """
 
@@ -54,6 +58,11 @@ C_POS = "#3E9E6A"
 C_NEG = "#D0505C"
 C_LF = "#9B7BD1"
 C_DARK = "#334155"
+
+# เกณฑ์ Load Factor: น้ำหนัก "หรือ" ปริมาตร ≥ 75% = ผ่าน · ต่ำกว่า 75% ทั้งคู่ = ต้องสนใจ
+PASS_LF = 0.75
+LF_BEST = "เกณฑ์รวม"
+LF_BASES = {LF_BEST: "BLF", "น้ำหนัก": "LF", "ปริมาตร": "VLF"}
 
 # ประเภทเที่ยว
 TT_NORMAL, TT_EMPTY, TT_BRANCH, TT_CANCEL = "เที่ยววิ่งปกติ", "เที่ยวเปล่า", "รถว่างไปสาขา", "ยกเลิก"
@@ -127,6 +136,27 @@ tr.do-grp td { border-top:2px solid #F3C9D1 !important; }
 .do-box .v { font-size:20px; font-weight:800; color:#0F172A; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .do-box .s { font-size:11.5px; color:#94A3B8; }
 @media (max-width:900px){ .do-quad { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+/* เกณฑ์ Load Factor 75% */
+.do-crit-card { background:#fff; border:1px solid #F4D8DE; border-radius:18px; padding:16px 18px; margin:0 0 12px;
+                box-shadow:0 1px 2px rgba(15,23,42,.04), 0 8px 24px rgba(226,90,112,.08); }
+.do-crit-title { font-size:17px; font-weight:700; color:#0F172A; }
+.do-crit-note { font-size:12.5px; color:#64748B; margin:2px 0 10px; }
+.do-crit-grid { display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:12px; }
+.do-crit { border-radius:16px; padding:14px 16px; border:1px solid; min-width:0; }
+.do-crit.ok { background:#F1FAF4; border-color:#BFE5CD; }
+.do-crit.attn { background:#FFF8EC; border-color:#F6D9A6; }
+.do-crit-head { font-size:14px; font-weight:700; color:#0F172A; }
+.do-crit-head small { display:block; font-size:12px; font-weight:500; color:#64748B; margin-top:2px; }
+.do-crit-num { font-size:28px; font-weight:800; margin-top:6px; font-variant-numeric:tabular-nums; }
+.do-crit.ok .do-crit-num { color:#3E9E6A; }
+.do-crit.attn .do-crit-num { color:#D97706; }
+.do-crit-num span { font-size:13px; font-weight:600; color:#64748B; }
+.do-crit-chips { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+.do-crit-chip { background:#fff; border:1px solid #F1E4E7; border-radius:99px; padding:3px 10px; font-size:12px; color:#64748B; }
+.do-crit-chip b { color:#1E293B; font-variant-numeric:tabular-nums; }
+.do-st-ok { color:#2E8B57; font-weight:700; white-space:nowrap; }
+.do-st-attn { color:#B45309; font-weight:700; white-space:nowrap; }
+@media (max-width:900px){ .do-crit-grid { grid-template-columns:1fr; } }
 </style>
 """
 ARROW = ' <span class="tc-arrow">→</span> '
@@ -205,6 +235,21 @@ def _run_tag(run) -> str:
 def _tt_badge(t) -> str:
     c = TT_COLORS.get(t, "#CBD5E1")
     return f'<span class="do-badge" style="background:{_tint(c, 0.72)};color:#3F2A2E">{esc(t)}</span>'
+
+
+def _crit_status(blf) -> str:
+    """สถานะเกณฑ์ LF ของเที่ยว (blf = ค่าที่ดีกว่าระหว่างน้ำหนัก/ปริมาตร ที่ไม่เกิน 100%)"""
+    v = _nz(blf)
+    if v is None:
+        return "—"
+    return "✅ ผ่าน" if v >= PASS_LF else "⚠️ ต้องสนใจ"
+
+
+def _crit_html(blf) -> str:
+    s = _crit_status(blf)
+    if s == "—":
+        return '<span class="tc-muted">—</span>'
+    return f'<span class="{"do-st-ok" if s.startswith("✅") else "do-st-attn"}">{s}</span>'
 
 
 # =========================================================
@@ -396,7 +441,8 @@ def build_dataset(path):
     out["_Trip"] = out["_TripKey"].fillna(fallback)
 
     # ---------- Load Factor รายเที่ยว ----------
-    lf = pd.DataFrame(columns=["key", "weight", "cap", "volume", "vcap", "tonkm"])
+    lf = pd.DataFrame(columns=["key", "weight", "cap", "volume", "vcap", "tonkm",
+                               "blf", "eval", "pass", "passby"])
     if lf_sheet is not None:
         raw = _read(xl, lf_sheet, LF_COLS)
         if {"key", "weight", "cap"} <= set(raw.columns):
@@ -412,6 +458,19 @@ def build_dataset(path):
             # Volume LF > 150% = ตรวจสอบข้อมูล ไม่นับในปริมาตรรวม (เหมือนหน้า Load Factor)
             bad = (lf["volume"] / lf["vcap"]) > 1.5
             lf.loc[bad | lf["vcap"].le(0), ["volume", "vcap"]] = float("nan")
+
+            # เกณฑ์ LF รายเที่ยว: ใช้ค่าที่ดีกว่าระหว่างน้ำหนักกับปริมาตร (เฉพาะค่าที่ไม่เกิน 100%)
+            w = (lf["weight"] / lf["cap"]).replace([float("inf")], float("nan"))
+            v = (lf["volume"] / lf["vcap"]).replace([float("inf")], float("nan"))
+            w_ok, v_ok = w.where(w <= 1.0), v.where(v <= 1.0)
+            lf["blf"] = pd.concat([w_ok, v_ok], axis=1).max(axis=1)
+            lf["eval"] = lf["blf"].notna().astype("float64")
+            lf["pass"] = lf["blf"].ge(PASS_LF).astype("float64")
+            pw, pv = w_ok.ge(PASS_LF), v_ok.ge(PASS_LF)
+            lf["passby"] = ""
+            lf.loc[pw & ~pv, "passby"] = "น้ำหนัก"
+            lf.loc[~pw & pv, "passby"] = "ปริมาตร"
+            lf.loc[pw & pv, "passby"] = "ทั้งคู่"
     lf = lf.set_index("key")
     out["_HasLF"] = out["_TripKey"].isin(lf.index)
 
@@ -459,10 +518,11 @@ def summarize(df, lf, by):
         a = t.groupby(by, dropna=False).agg(
             LFTrips=("_TripKey", "nunique"), W=("weight", "sum"), Cap=("cap", "sum"),
             V=("volume", "sum"), VCap=("vcap", "sum"), TonKm=("tonkm", "sum"),
+            PassTrips=("pass", "sum"), EvalTrips=("eval", "sum"),
         )
         s = s.join(a)
     for col in ("LFTrips", "W", "Cap", "V", "VCap", "TonKm", "CostLF",
-                "EmptyTrips", "EmptyCost", "BranchTrips", "BranchCost"):
+                "EmptyTrips", "EmptyCost", "BranchTrips", "BranchCost", "PassTrips", "EvalTrips"):
         if col not in s:
             s[col] = 0.0
         s[col] = s[col].fillna(0)
@@ -471,6 +531,11 @@ def summarize(df, lf, by):
     s["LossCost"] = s["EmptyCost"] + s["BranchCost"]
     s["LF"] = s["W"] / s["Cap"].where(s["Cap"] > 0, nan)
     s["VLF"] = s["V"] / s["VCap"].where(s["VCap"] > 0, nan)
+    # เกณฑ์รวม: ค่าที่ดีกว่าระหว่าง LF น้ำหนักกับ LF ปริมาตร (ใช้ค่าที่ไม่เกิน 100% ก่อน)
+    best_ok = pd.concat([s["LF"].where(s["LF"] <= 1.0), s["VLF"].where(s["VLF"] <= 1.0)], axis=1).max(axis=1)
+    s["BLF"] = best_ok.fillna(pd.concat([s["LF"], s["VLF"]], axis=1).max(axis=1))
+    s["AttnTrips"] = s["EvalTrips"] - s["PassTrips"]
+    s["PassRate"] = s["PassTrips"] / s["EvalTrips"].where(s["EvalTrips"] > 0, nan)
     s["Margin"] = s["Profit"] / s["Revenue"].where(s["Revenue"] != 0, nan)
     s["CMPct"] = s["CM"] / s["Revenue"].where(s["Revenue"] != 0, nan)
     s["CostTonKm"] = s["CostLF"] / s["TonKm"].where(s["TonKm"] > 0, nan)
@@ -482,6 +547,16 @@ def summarize(df, lf, by):
 def totals(df, lf):
     s = summarize(df.assign(_All="all"), lf, "_All")
     return s.iloc[0] if not s.empty else None
+
+
+def _pass_cell(r) -> str:
+    """เซลล์ % เที่ยวผ่านเกณฑ์ LF พร้อมจำนวนเที่ยวที่ต้องสนใจ"""
+    rate = _nz(r["PassRate"])
+    if rate is None:
+        return '<td class="tc-num tc-muted">—</td>'
+    cls = "do-pos" if rate >= 0.5 else "do-neg"
+    return (f'<td class="tc-num"><span class="{cls}">{fp(rate)}</span>'
+            f'<br><small class="tc-muted">ต้องสนใจ {int(r["AttnTrips"]):,}</small></td>')
 
 
 # =========================================================
@@ -499,7 +574,7 @@ def render_direction_overview_dashboard():
     stat = path.stat()
     try:
         with st.spinner("กำลังอ่านไฟล์และจับคู่ข้อมูล (ครั้งแรกอาจใช้เวลาสักครู่)..."):
-            data, lf, info = load_direction_data(str(path), (path.name, stat.st_mtime_ns, stat.st_size, "v2"))
+            data, lf, info = load_direction_data(str(path), (path.name, stat.st_mtime_ns, stat.st_size, "v3"))
     except Exception as e:
         st.error(f"อ่านไฟล์ {path.name} ไม่สำเร็จ: {e}")
         return
@@ -548,7 +623,7 @@ def render_direction_overview_dashboard():
         else:
             st.caption("ไม่มีข้อมูลสาขา")
 
-    g1, g2, g3, g4, g5 = fcard.columns([2.2, 1, 1, 1.05, 1.05])
+    g1, g2, g3, g4, g5 = fcard.columns([2.2, 1, 1, 1.05, 1.3])
     with g1:
         dir_opts = sorted(d for d in filtered["_Dir"].unique() if d and d != NO_ROUTE)
         chosen_dirs = st.multiselect("ทิศทาง (ต้นทาง → ปลายทาง)", dir_opts,
@@ -568,8 +643,10 @@ def render_direction_overview_dashboard():
         basis = st.radio("วัดกำไรด้วย", ["กำไรสุทธิ", "CM"], horizontal=True, key="do_basis",
                          help="กำไรสุทธิ = รายได้ − ต้นทุนทั้งหมด · CM = รายได้ − ต้นทุนผันแปร")
     with g5:
-        lf_basis = st.radio("Load Factor ใช้วัด", ["น้ำหนัก", "ปริมาตร"], horizontal=True, key="do_lf_basis",
-                            help="ใช้กับกราฟจัดกลุ่ม อันดับ และข้อสังเกต · ตารางแสดงทั้งสองค่าเสมอ")
+        lf_basis = st.radio("Load Factor ใช้วัด", list(LF_BASES), horizontal=True, key="do_lf_basis2",
+                            help="เกณฑ์รวม = ใช้ค่าที่สูงกว่าระหว่าง LF น้ำหนักกับ LF ปริมาตร "
+                                 "(ผ่านเมื่ออย่างใดอย่างหนึ่ง ≥75%) · ใช้กับกราฟจัดกลุ่ม อันดับ และข้อสังเกต · "
+                                 "ตารางแสดงทั้งสองค่าเสมอ")
     base = filtered  # ก่อนกรองทิศทาง ใช้หาขากลับ
     if chosen_dirs:
         filtered = filtered[filtered["_Dir"].isin(chosen_dirs)]
@@ -580,8 +657,8 @@ def render_direction_overview_dashboard():
     P = "Profit" if basis == "กำไรสุทธิ" else "CM"
     PP = "Margin" if P == "Profit" else "CMPct"
     P_LABEL = basis
-    LFK = "LF" if lf_basis == "น้ำหนัก" else "VLF"
-    LF_LABEL = f"LF {lf_basis}"
+    LFK = LF_BASES[lf_basis]
+    LF_LABEL = "LF เกณฑ์รวม" if LFK == "BLF" else f"LF {lf_basis}"
 
     dirs = summarize(filtered, lf, "_Dir")
     valid = dirs.drop(index=NO_ROUTE, errors="ignore").copy()
@@ -603,6 +680,8 @@ def render_direction_overview_dashboard():
         )
 
     lf_cover = _div(tot["LFTrips"], tot["Trips"])
+    on_w = "on" if LFK in ("LF", "BLF") else ""
+    on_v = "on" if LFK in ("VLF", "BLF") else ""
     cards = [
         kpi("🚚", "#FFE8EC", "จำนวนเที่ยว", f'{int(tot["Trips"]):,}',
             f'{int(valid["_Dir"].nunique()):,} ทิศทาง'),
@@ -614,15 +693,57 @@ def render_direction_overview_dashboard():
         kpi("➕", "#EEF2FF", "CM", fm(tot["CM"]), f'{fp(tot["CMPct"])} ของรายได้', sign_cls(tot["CM"])),
         (f'<div class="tc-kpi"><div class="tc-kpi-icon" style="background:#F3EEFB">⚖️</div>'
          f'<div><div class="tc-kpi-label">Load Factor</div><div class="do-lf2">'
-         f'<span class="{"on" if LFK == "LF" else ""}">น้ำหนัก<b>{fp(tot["LF"])}</b></span>'
-         f'<span class="{"on" if LFK == "VLF" else ""}">ปริมาตร<b>{fp(tot["VLF"])}</b></span></div>'
-         f'<div class="tc-kpi-sub">มีข้อมูล {fp(lf_cover)} ของเที่ยว</div></div></div>'),
+         f'<span class="{on_w}">น้ำหนัก<b>{fp(tot["LF"])}</b></span>'
+         f'<span class="{on_v}">ปริมาตร<b>{fp(tot["VLF"])}</b></span></div>'
+         f'<div class="tc-kpi-sub">ผ่านเกณฑ์ 75% {fp(tot["PassRate"])} ของเที่ยว · มีข้อมูล {fp(lf_cover)}</div>'
+         f'</div></div>'),
         kpi("🛣️", "#FFF7E0", "ต้นทุนต่อตัน-กม.", fck(tot["CostTonKm"]), f'{tot["TonKm"]:,.0f} ตัน-กม.'),
         kpi("🅾️", "#FDE9EC", "เที่ยวเปล่า + รถว่างไปสาขา", fm(tot["LossCost"]),
             f'เปล่า {int(tot["EmptyTrips"]):,} · รถว่าง {int(tot["BranchTrips"]):,} เที่ยว',
             "do-neg" if tot["LossCost"] > 0 else ""),
     ]
     st.markdown('<div class="do-kpi-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
+
+    # ---------------- เกณฑ์ Load Factor 75% (รายเที่ยว) ----------------
+    trip_keys = filtered.loc[filtered["_HasLF"], "_TripKey"].dropna().unique()
+    ct = lf.loc[lf.index.intersection(trip_keys)] if not lf.empty else lf
+    ev = ct[ct["eval"] > 0] if not ct.empty else ct
+    if not ev.empty:
+        n_eval = len(ev)
+        ok = ev[ev["blf"] >= PASS_LF]
+        attn = ev[ev["blf"] < PASS_LF]
+        by_pass = ok["passby"].value_counts().to_dict()
+        rng = pd.cut(attn["blf"], [-0.001, 0.25, 0.50, PASS_LF], right=False,
+                     labels=["0–25%", "25–50%", "50–75%"]).value_counts().to_dict()
+
+        def pct(n):
+            return f"{n / n_eval * 100:.1f}%" if n_eval else "—"
+
+        def chips(items):
+            return "".join(f'<span class="do-crit-chip">{esc(k)} <b>{int(v):,}</b></span>' for k, v in items)
+
+        st.markdown(
+            '<div class="do-crit-card"><div class="do-crit-title">เกณฑ์ Load Factor 75%</div>'
+            '<div class="do-crit-note">ผ่านเกณฑ์ = น้ำหนัก <b>หรือ</b> ปริมาตร ≥75% อย่างใดอย่างหนึ่ง · '
+            'ต้องสนใจ = ต่ำกว่า 75% <b>ทั้ง</b>น้ำหนักและปริมาตร · '
+            f'คิดจาก {n_eval:,} เที่ยวที่มีข้อมูล LF (ไม่นับค่าที่เกิน 100%)</div>'
+            '<div class="do-crit-grid">'
+            '<div class="do-crit ok"><div class="do-crit-head">✅ ผ่านเกณฑ์'
+            '<small>ใช้ความจุรถคุ้มแล้ว</small></div>'
+            f'<div class="do-crit-num">{len(ok):,} <span>เที่ยว · {pct(len(ok))}</span></div>'
+            '<div class="do-crit-chips">'
+            + chips([("ผ่านด้วยน้ำหนัก", by_pass.get("น้ำหนัก", 0)),
+                     ("ผ่านด้วยปริมาตร", by_pass.get("ปริมาตร", 0)),
+                     ("ผ่านทั้งคู่", by_pass.get("ทั้งคู่", 0))])
+            + '</div></div>'
+            '<div class="do-crit attn"><div class="do-crit-head">⚠️ กลุ่มที่ต้องสนใจ'
+            '<small>แบ่งตามค่าที่สูงกว่าระหว่างน้ำหนักกับปริมาตร</small></div>'
+            f'<div class="do-crit-num">{len(attn):,} <span>เที่ยว · {pct(len(attn))}</span></div>'
+            '<div class="do-crit-chips">'
+            + chips([(k, rng.get(k, 0)) for k in ("0–25%", "25–50%", "50–75%")])
+            + '</div></div></div></div>',
+            unsafe_allow_html=True,
+        )
 
     # ---------------- ข้อสังเกตสำคัญ ----------------
     min_trips_insight = 5
@@ -643,6 +764,12 @@ def render_direction_overview_dashboard():
             top_loss = loss_dirs.loc[loss_dirs["LossCost"].idxmax()]
             cells.append(("#D9772B", "🅾️", "เที่ยวเปล่า/รถว่าง สูงสุด", fm(top_loss["LossCost"]), top_loss["_Dir"],
                           f'เปล่า {int(top_loss["EmptyTrips"]):,} · รถว่าง {int(top_loss["BranchTrips"]):,} เที่ยว'))
+        attn_rel = rel[rel["AttnTrips"] > 0]
+        if not attn_rel.empty:
+            top_attn = attn_rel.loc[attn_rel["AttnTrips"].idxmax()]
+            cells.append(("#D97706", "⚠️", "เที่ยวต้องสนใจ (LF <75% ทั้งคู่) มากสุด",
+                          f'{int(top_attn["AttnTrips"]):,} เที่ยว', top_attn["_Dir"],
+                          f'ผ่านเกณฑ์ {fp(top_attn["PassRate"])} · LF น้ำหนัก {fp(top_attn["LF"])} · ปริมาตร {fp(top_attn["VLF"])}'))
         lf_rel = rel[rel[LFK].notna()]
         if not lf_rel.empty:
             low = lf_rel.loc[lf_rel[LFK].idxmin()]
@@ -667,11 +794,13 @@ def render_direction_overview_dashboard():
 
     # ---------------- จัดกลุ่มทิศทาง: บรรทุก × กำไร ----------------
     with _card("do_quad"):
-        st.markdown(f"#### จัดกลุ่มทิศทาง: บรรทุกเต็มแค่ไหน ({LF_LABEL}) × {P_LABEL}ดีแค่ไหน")
+        st.markdown(f"#### จัดกลุ่มทิศทาง: บรรทุกผ่านเกณฑ์หรือไม่ ({LF_LABEL}) × {P_LABEL}ดีแค่ไหน")
         q1, q2, _q3 = st.columns([1, 1, 2])
+        target_opts = [40, 50, 60, 70, 75, 80]
         with q1:
-            lf_target = st.selectbox(f"ถือว่า “บรรทุกดี” เมื่อ {LF_LABEL} ถึง", [40, 50, 60, 70, 80], index=1,
-                                     format_func=lambda v: f"{v}%", key="do_lf_target2")
+            lf_target = st.selectbox(f"เกณฑ์ “บรรทุกผ่าน” เมื่อ {LF_LABEL} ถึง", target_opts,
+                                     index=target_opts.index(int(PASS_LF * 100)),
+                                     format_func=lambda v: f"{v}%", key="do_lf_target3")
         with q2:
             min_trips = st.selectbox("แสดงทิศทางที่วิ่งอย่างน้อย", [1, 5, 10, 20, 50], index=2,
                                      format_func=lambda v: f"{v} เที่ยว", key="do_min_trips2")
@@ -685,22 +814,24 @@ def render_direction_overview_dashboard():
             q["x"] = q["x_real"].clip(upper=110)
             q["y"] = q["y_real"].clip(-100, 100)
             groups = [
-                ("fix", "🚨 บรรทุกน้อย + ขาดทุน", "แก้ก่อน: รวมเที่ยว/ลดรอบวิ่ง", C_NEG,
+                ("fix", f"🚨 LF ต่ำกว่า {t}% + ขาดทุน", "ต้องสนใจก่อน: รวมเที่ยว/ลดรอบวิ่ง", C_NEG,
                  (q["x_real"] < t) & (q[P] < 0)),
-                ("price", "💲 บรรทุกดี แต่ขาดทุน", "ดูราคาค่าขนส่ง/ต้นทุน", "#F6AE6B",
+                ("price", f"💲 LF ผ่าน {t}% แต่ขาดทุน", "ดูราคาค่าขนส่ง/ต้นทุน", "#F6AE6B",
                  (q["x_real"] >= t) & (q[P] < 0)),
-                ("room", "📦 มีกำไร แต่ยังเติมของได้", "หาของเพิ่ม/ใช้รถเล็กลง", C_REV,
+                ("room", f"📦 มีกำไร แต่ LF ต่ำกว่า {t}%", "ต้องสนใจ: หาของเพิ่ม/ใช้รถเล็กลง", C_REV,
                  (q["x_real"] < t) & (q[P] >= 0)),
-                ("good", "✅ บรรทุกดี + มีกำไร", "รักษาไว้", C_POS,
+                ("good", f"✅ LF ผ่าน {t}% + มีกำไร", "รักษาไว้", C_POS,
                  (q["x_real"] >= t) & (q[P] >= 0)),
             ]
             q["grp"] = ""
             for key, _n, _a, _c, m in groups:
                 q.loc[m, "grp"] = key
 
+            lf_how = ("ใช้ค่าที่สูงกว่าระหว่าง LF น้ำหนักกับ LF ปริมาตร — ผ่านเมื่ออย่างใดอย่างหนึ่งถึงเกณฑ์"
+                      if LFK == "BLF" else f"วัดด้วย{LF_LABEL}")
             st.markdown(
                 '<div class="do-how">📖 <b>วิธีอ่าน:</b> แต่ละวงกลม = 1 ทิศทาง · '
-                f'<b>ยิ่งไปทางขวา</b> = บรรทุกเต็มกว่า วัดด้วย{LF_LABEL} (เส้นประแนวตั้ง = {t}%) · '
+                f'<b>ยิ่งไปทางขวา</b> = บรรทุกเต็มกว่า ({lf_how}; เส้นประแนวตั้ง = {t}%) · '
                 f'<b>ยิ่งสูง</b> = {P_LABEL}ต่อรายได้ดีกว่า (เส้นประแนวนอน = 0%) · '
                 'วงใหญ่ = วิ่งบ่อย · ชื่อที่แสดง = 8 ทิศทางที่วิ่งบ่อยที่สุด · '
                 'ดูรายชื่อทั้งหมดของแต่ละกลุ่มได้ในแท็บด้านล่างกราฟ</div>',
@@ -732,12 +863,13 @@ def render_direction_overview_dashboard():
                     textposition="top center", textfont=dict(size=10.5, color=C_DARK),
                     customdata=q.loc[q["grp"] == key, ["_Dir", "Trips", "Revenue", "Cost", P, "y_real",
                                                        "LossTrips"]].assign(
-                        _w=q["LF"] * 100, _v=q["VLF"] * 100).to_numpy(),
+                        _w=q["LF"] * 100, _v=q["VLF"] * 100, _p=q["PassRate"] * 100).to_numpy(),
                     hovertemplate=(
                         "<b>%{customdata[0]}</b><br>%{customdata[1]:,} เที่ยว"
                         "<br>รายได้ ฿%{customdata[2]:,.0f} · ต้นทุน ฿%{customdata[3]:,.0f}"
                         f"<br>{P_LABEL} ฿%{{customdata[4]:,.0f}} (%{{customdata[5]:.1f}}%)"
                         "<br>LF น้ำหนัก %{customdata[7]:.1f}% · LF ปริมาตร %{customdata[8]:.1f}%"
+                        "<br>เที่ยวผ่านเกณฑ์ 75% %{customdata[9]:.1f}%"
                         "<br>เที่ยวเปล่า/รถว่าง %{customdata[6]:,.0f} เที่ยว<extra></extra>"
                     ),
                 ))
@@ -787,14 +919,15 @@ def render_direction_overview_dashboard():
                             f'<td class="tc-num {sign_cls(r[PP])}">{fp(r[PP])}</td>'
                             f'<td class="tc-num">{fp(r["LF"])}</td>'
                             f'<td class="tc-num">{fp(r["VLF"])}</td>'
+                            + _pass_cell(r) +
                             f'<td class="tc-num tc-muted">{int(r["LossTrips"]):,}</td>'
                             "</tr>"
                         )
                     st.caption(f"{len(part):,} ทิศทาง · เรียงตามจำนวนเที่ยว · แสดงสูงสุด 100 ทิศทาง")
                     st.markdown(_table_html(
                         ["#", "ทิศทาง", "เที่ยว", "รายได้", P_LABEL, f"อัตรา{P_LABEL}", "LF น้ำหนัก",
-                         "LF ปริมาตร", "เที่ยวเปล่า/รถว่าง"],
-                        body, right_cols={2, 3, 4, 5, 6, 7, 8}, max_height=380), unsafe_allow_html=True)
+                         "LF ปริมาตร", "เที่ยวผ่านเกณฑ์ 75%", "เที่ยวเปล่า/รถว่าง"],
+                        body, right_cols={2, 3, 4, 5, 6, 7, 8, 9}, max_height=380), unsafe_allow_html=True)
 
     # ---------------- อันดับทิศทาง: รายได้ vs ต้นทุน ----------------
     with _card("do_rank"):
@@ -806,6 +939,7 @@ def render_direction_overview_dashboard():
             "ขาดทุนมากที่สุด": (P, True),
             "ต้นทุนเที่ยวเปล่า + รถว่างไปสาขา สูงสุด": ("LossCost", False),
             "จำนวนเที่ยวมากที่สุด": ("Trips", False),
+            "เที่ยวต้องสนใจ (LF <75% ทั้งคู่) มากที่สุด": ("AttnTrips", False),
             f"{LF_LABEL} ต่ำสุด": (LFK, True),
         }
         r1, r2 = st.columns([1.6, 0.6])
@@ -819,7 +953,9 @@ def render_direction_overview_dashboard():
             pool = pool[pool[P] < 0]
         if col == "LossCost":
             pool = pool[pool["LossCost"] > 0]
-        if col in ("LF", "VLF"):
+        if col == "AttnTrips":
+            pool = pool[pool["AttnTrips"] > 0]
+        if col in ("LF", "VLF", "BLF"):
             pool = pool[pool[col].notna()]
         plot = pool.sort_values(col, ascending=asc, na_position="last").head(top_n).iloc[::-1]
         st.caption(f"แท่งฟ้า = รายได้ · แท่งชมพู = ต้นทุน · ◆ = {P_LABEL} (เขียว = กำไร, แดง = ขาดทุน)"
@@ -846,10 +982,11 @@ def render_direction_overview_dashboard():
                             line=dict(color="white", width=1.5)),
                 text=[f"  {fm(v)}" for v in plot[P]], textposition="middle right",
                 textfont=dict(size=11, color=C_DARK),
-                customdata=plot[["Trips", PP, "LF", "VLF"]].to_numpy(),
+                customdata=plot[["Trips", PP, "LF", "VLF", "PassRate"]].to_numpy(),
                 hovertemplate=(f"%{{y}}<br>{P_LABEL} ฿%{{x:,.0f}} (%{{customdata[1]:.1%}})"
                                "<br>%{customdata[0]:,} เที่ยว · LF น้ำหนัก %{customdata[2]:.1%}"
-                               " · LF ปริมาตร %{customdata[3]:.1%}<extra></extra>"),
+                               " · LF ปริมาตร %{customdata[3]:.1%}"
+                               "<br>เที่ยวผ่านเกณฑ์ 75% %{customdata[4]:.1%}<extra></extra>"),
             ))
             fig.update_layout(
                 barmode="group", bargap=0.25, height=max(380, 50 * len(plot) + 120),
@@ -926,6 +1063,7 @@ def render_direction_overview_dashboard():
                                          placeholder="พิมพ์ชื่อสถานที่เพื่อค้นหา", key=_wkey("do_table_routes", table_routes))
         tsort = {"รายได้": ("Revenue", False), f"{P_LABEL} (น้อย → มาก)": (P, True),
                  f"{P_LABEL} (มาก → น้อย)": (P, False), "เที่ยวเปล่า + รถว่าง": ("LossCost", False),
+                 "เที่ยวต้องสนใจ (LF <75%)": ("AttnTrips", False),
                  "จำนวนเที่ยว": ("Trips", False), "ชื่อ": ("Name", True)}
         with s2:
             tsort_label = st.selectbox("เรียงคู่ตาม", list(tsort), key=_wkey("do_table_sort", list(tsort)))
@@ -935,7 +1073,8 @@ def render_direction_overview_dashboard():
         grp_rows = valid[valid["_PairKey"].isin(shown["_PairKey"].unique())]
         pair_agg = grp_rows.groupby("_PairKey").agg(
             Revenue=("Revenue", "sum"), Profit=("Profit", "sum"), CM=("CM", "sum"),
-            LossCost=("LossCost", "sum"), Trips=("Trips", "sum"), Name=("_Dir", "min"))
+            LossCost=("LossCost", "sum"), AttnTrips=("AttnTrips", "sum"),
+            Trips=("Trips", "sum"), Name=("_Dir", "min"))
         pair_order = pair_agg.sort_values(sort_by, ascending=asc).index.tolist()
         MAX_PAIRS = 300
         cut = len(pair_order) > MAX_PAIRS
@@ -943,7 +1082,7 @@ def render_direction_overview_dashboard():
         run_rank = {"ขาขึ้น": 0, "ขาล่อง": 1}
 
         head = ["#", "ทิศทาง", "เที่ยว", "รายได้", "ต้นทุน", P_LABEL, f"อัตรา{P_LABEL}",
-                "LF น้ำหนัก", "LF ปริมาตร", "เที่ยวเปล่า / รถว่าง", "ต้นทุน/ตัน-กม."]
+                "LF น้ำหนัก", "LF ปริมาตร", "เที่ยวผ่านเกณฑ์ 75%", "เที่ยวเปล่า / รถว่าง", "ต้นทุน/ตัน-กม."]
         body, export_rows = [], []
         for rank, pk in enumerate(pair_order, 1):
             members = grp_rows[grp_rows["_PairKey"] == pk].copy()
@@ -977,6 +1116,7 @@ def render_direction_overview_dashboard():
                     f'<td class="tc-num {sign_cls(r[PP])}">{fp(r[PP])}</td>',
                     f'<td class="tc-num">{fp(r["LF"])}</td>',
                     f'<td class="tc-num">{fp(r["VLF"])}</td>',
+                    _pass_cell(r),
                     loss_cell,
                     f'<td class="tc-num tc-muted">{fck(r["CostTonKm"])}</td>',
                 ]
@@ -987,6 +1127,9 @@ def render_direction_overview_dashboard():
                     "อัตรากำไรสุทธิ": r["Margin"], "อัตรา CM": r["CMPct"],
                     "กำไรสุทธิต่อเที่ยว": r["ProfitPerTrip"],
                     "Load Factor น้ำหนัก": r["LF"], "Load Factor ปริมาตร": r["VLF"],
+                    "เที่ยวผ่านเกณฑ์ LF 75%": int(r["PassTrips"]),
+                    "เที่ยวต้องสนใจ (LF <75% ทั้งคู่)": int(r["AttnTrips"]),
+                    "% เที่ยวผ่านเกณฑ์": r["PassRate"],
                     "เที่ยวเปล่า (เที่ยว)": int(r["EmptyTrips"]), "ต้นทุนเที่ยวเปล่า": r["EmptyCost"],
                     "รถว่างไปสาขา (เที่ยว)": int(r["BranchTrips"]), "ต้นทุนรถว่างไปสาขา": r["BranchCost"],
                     "Ton-km": r["TonKm"], "ต้นทุนต่อตัน-กม.": r["CostTonKm"],
@@ -996,7 +1139,9 @@ def render_direction_overview_dashboard():
             f"แสดง {len(pair_order):,} คู่สถานที่" + (f" (แสดงสูงสุด {MAX_PAIRS} คู่)" if cut else "")
             + " · ป้าย ขาขึ้น/ขาล่อง มาจากคอลัมน์ เที่ยววิ่ง ในไฟล์ (ค่าที่พบบ่อยที่สุดของทิศทางนั้น)"
             + " · LF น้ำหนัก = น้ำหนักรวม ÷ ความจุน้ำหนักรวม · LF ปริมาตร = ปริมาตรรวม ÷ ความจุปริมาตรรวม"
-              " (ไม่นับเที่ยวที่ LF ปริมาตรเกิน 150%) · ต้นทุน/ตัน-กม. คิดเฉพาะเที่ยวที่มีข้อมูลน้ำหนัก"
+              " (ไม่นับเที่ยวที่ LF ปริมาตรเกิน 150%)"
+            + " · เที่ยวผ่านเกณฑ์ 75% = % ของเที่ยวที่น้ำหนักหรือปริมาตร ≥75% · ต้องสนใจ = ต่ำกว่า 75% ทั้งคู่"
+            + " · ต้นทุน/ตัน-กม. คิดเฉพาะเที่ยวที่มีข้อมูลน้ำหนัก"
         )
         st.markdown(_table_html(head, body, right_cols=set(range(2, len(head))), max_height=540),
                     unsafe_allow_html=True)
@@ -1027,6 +1172,8 @@ def render_direction_overview_dashboard():
                 ("CM", fm(row["CM"]), f'{fp(row["CMPct"])} ของรายได้'),
                 ("LF น้ำหนัก", fp(row["LF"]), "น้ำหนักรวม ÷ ความจุน้ำหนัก"),
                 ("LF ปริมาตร", fp(row["VLF"]), "ปริมาตรรวม ÷ ความจุปริมาตร"),
+                ("เที่ยวผ่านเกณฑ์ LF 75%", fp(row["PassRate"]),
+                 f'{int(row["PassTrips"]):,} จาก {int(row["EvalTrips"]):,} เที่ยว · ต้องสนใจ {int(row["AttnTrips"]):,}'),
                 ("ต้นทุนต่อตัน-กม.", fck(row["CostTonKm"]), f'{row["TonKm"]:,.0f} ตัน-กม.'),
                 ("เที่ยวเปล่า + รถว่างไปสาขา", f'{int(row["LossTrips"]):,} เที่ยว',
                  f'เปล่า {int(row["EmptyTrips"]):,} · รถว่าง {int(row["BranchTrips"]):,} · ต้นทุน {fm(row["LossCost"])}'),
@@ -1053,16 +1200,17 @@ def render_direction_overview_dashboard():
                 Profit=("_Profit", "sum"), CM=("_CM", "sum"), TripKey=("_TripKey", "first"),
             )
             if not lf.empty:
-                trips = trips.join(lf[["weight", "cap", "volume", "vcap"]], on="TripKey")
+                trips = trips.join(lf[["weight", "cap", "volume", "vcap", "blf"]], on="TripKey")
                 trips["LF"] = trips["weight"] / trips["cap"]
                 trips["VLF"] = trips["volume"] / trips["vcap"]
             else:
-                trips["weight"], trips["LF"], trips["volume"], trips["VLF"] = (float("nan"),) * 4
+                trips["weight"], trips["LF"], trips["volume"], trips["VLF"], trips["blf"] = (float("nan"),) * 5
+            trips["เกณฑ์ LF 75%"] = trips["blf"].map(_crit_status)
             trips = trips.sort_values(P)
 
             with st.expander(f"ดูรายเที่ยวของ {pick} ({len(trips):,} เที่ยว)"):
                 head = ["วันที่", "ทะเบียนรถ", "ประเภทรถ", "ประเภทเที่ยว", "ใบงาน", "น้ำหนัก (กก.)", "LF น้ำหนัก",
-                        "ปริมาตร (ม³)", "LF ปริมาตร", "รายได้", "ต้นทุน", P_LABEL]
+                        "ปริมาตร (ม³)", "LF ปริมาตร", "เกณฑ์ LF 75%", "รายได้", "ต้นทุน", P_LABEL]
                 body = []
                 for r in trips.head(300).to_dict("records"):
                     date_txt = r["Date"].strftime("%d/%m/%Y") if pd.notna(r["Date"]) else "—"
@@ -1079,13 +1227,15 @@ def render_direction_overview_dashboard():
                         f'<td class="tc-num">{fp(r["LF"])}</td>'
                         f'<td class="tc-num tc-muted">{vol}</td>'
                         f'<td class="tc-num">{fp(r["VLF"])}</td>'
+                        f'<td class="tc-num">{_crit_html(r["blf"])}</td>'
                         f'<td class="tc-num">{ff(r["Revenue"])}</td>'
                         f'<td class="tc-num">{ff(r["Cost"])}</td>'
                         f'<td class="tc-num {sign_cls(r[P])}"><b>{ff(r[P])}</b></td>'
                         "</tr>"
                     )
                 st.caption(f"เรียงจาก{P_LABEL}น้อยไปมาก (ขาดทุนขึ้นก่อน) · แสดงสูงสุด 300 เที่ยว · "
-                           "1 เที่ยวอาจมีหลายใบงาน รายได้และต้นทุนรวมทุกใบงานในเที่ยวนั้น")
+                           "1 เที่ยวอาจมีหลายใบงาน รายได้และต้นทุนรวมทุกใบงานในเที่ยวนั้น · "
+                           "เกณฑ์ LF 75%: ผ่าน = น้ำหนักหรือปริมาตร ≥75% · ต้องสนใจ = ต่ำกว่า 75% ทั้งคู่")
                 st.markdown(_table_html(head, body, right_cols=set(range(4, len(head))), max_height=420),
                             unsafe_allow_html=True)
                 export = trips.reset_index().rename(columns={
@@ -1096,7 +1246,7 @@ def render_direction_overview_dashboard():
                 })
                 export = export[[c for c in ["เที่ยว", "วันที่", "ทะเบียนรถ", "ประเภทรถ", "เที่ยววิ่ง", "ประเภทเที่ยว",
                                              "จำนวนใบงาน", "น้ำหนัก (กก.)", "LF น้ำหนัก", "ปริมาตร (ม³)",
-                                             "LF ปริมาตร", "รายได้", "ต้นทุน",
+                                             "LF ปริมาตร", "เกณฑ์ LF 75%", "รายได้", "ต้นทุน",
                                              "กำไรสุทธิ", "CM"]
                                  if c in export.columns]]
                 st.download_button(
