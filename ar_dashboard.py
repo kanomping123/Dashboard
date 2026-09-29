@@ -55,6 +55,7 @@ from transport_cost_route import (
 
 DATA_FOLDER = Path("data")
 FILE_KEYWORDS = ["ลูกหนี้"]
+EXCLUDE_KEYWORDS = ["เชื่อม"]
 PLOT_CONFIG = {"displayModeBar": False}
 
 # ---------------- ช่วงอายุหนี้ (ตามชีตเงื่อนไข) ----------------
@@ -320,9 +321,12 @@ def find_ar_file():
         f for f in DATA_FOLDER.iterdir()
         if f.is_file() and f.suffix.lower() in {".xlsx", ".xlsm"} and not f.name.startswith("~$")
     ]
+    # ไม่ใช้ไฟล์ เชื่อมลูกหนี้ลูกค้า (เป็นไฟล์สรุปรายลูกค้าของหน้าภาพรวมรายทิศทาง)
+    files = [f for f in files if not any(_n(x) in _n(f.stem) for x in EXCLUDE_KEYWORDS)]
     named = [f for f in files if any(_n(k) in _n(f.stem) for k in FILE_KEYWORDS)]
     if named:
-        return max(named, key=lambda f: f.stat().st_mtime_ns)
+        # ชื่อที่มีคำว่า รายงาน มาก่อน แล้วค่อยดูไฟล์ที่แก้ไขล่าสุด
+        return max(named, key=lambda f: ("รายงาน" in _n(f.stem), f.stat().st_mtime_ns))
     try:
         from openpyxl import load_workbook
     except ImportError:

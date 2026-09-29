@@ -565,7 +565,7 @@ def _pass_cell(r) -> str:
 # DASHBOARD
 # =========================================================
 
-def render_direction_overview_dashboard():
+def _render_direction_main():
     path = find_source_file()
     if path is None:
         st.error(
@@ -1257,6 +1257,7 @@ def render_direction_overview_dashboard():
                     file_name="direction_trips.csv", mime="text/csv", key="do_detail_download",
                 )
 
+
     cover = _div(data["_HasLF"].sum(), len(data))
     tt_counts = data["_TType"].value_counts()
     tt_note = " · ".join(f"{t} {int(tt_counts.get(t, 0)):,}" for t in TRIP_TYPES if tt_counts.get(t, 0))
@@ -1265,3 +1266,408 @@ def render_direction_overview_dashboard():
         f'{info["rows"]:,} ใบงาน ({esc(tt_note)}) · จับคู่ Load Factor ได้ {fp(cover)} ของใบงาน</div>',
         unsafe_allow_html=True,
     )
+
+
+
+# =========================================================
+# ภาพรวมลูกค้า: กำไร × พฤติกรรมการจ่ายหนี้ (ไฟล์ เชื่อมลูกหนี้ลูกค้า)
+# =========================================================
+
+CUST_KEYWORD = "เชื่อมลูกหนี้"
+C_GOOD, C_OK, C_WARN, C_BAD = "#3E9E6A", "#7CC4D6", "#F2A541", "#D0505C"
+
+CUST_COLS = {
+    "name": ["ชื่อลูกหนี้", "ชื่อลูกค้า", "ลูกค้า"],
+    "bills": ["จำนวนบิลทั้งหมด"],
+    "late_bills": ["จำนวนบิลที่ช้า"],
+    "sum_delay": ["รวมวันช้า"],
+    "max_delay": ["วันช้าสูงสุด"],
+    "late_rate": ["เปอร์เซนต์บิลที่ช้า", "เปอร์เซ็นต์บิลที่ช้า", "%บิลที่ช้า"],
+    "aging": ["กลุ่มช่วงอายุลูกหนี้", "กลุ่มอายุลูกหนี้"],
+    "cls": ["การแบ่งชั้นลูกหนี้TFRS9", "แบ่งชั้นลูกหนี้TFRS9", "การแบ่งชั้นลูกหนี้", "แบ่งชั้นลูกหนี้", "ชั้นลูกหนี้"],
+    "risk": ["ความเสี่ยง"],
+    "b0": ["ยอดไม่ค้าง0วัน", "ยอดไม่ค้าง"],
+    "b1": ["ยอดค้าง130วัน"],
+    "b2": ["ยอดค้าง3160วัน"],
+    "b3": ["ยอดค้าง6190วัน"],
+    "b4": ["ยอดค้างเกิน90วัน"],
+    "billed": ["รวมยอดทั้งหมด"],
+    "wrisk": ["ความเสี่ยงถ่วงน้ำหนัก"],
+    "revenue": ["รายได้รวมลูกค้า", "รายได้รวม", "รายได้"],
+    "cost": ["ต้นทุนที่ปันส่วน", "ต้นทุนรวม", "ต้นทุน"],
+    "profit": ["กำไร", "กำไรสุทธิ"],
+    "product": ["ประเภทสินค้ารายได้สูงสุด", "ประเภทสินค้าหลัก", "ประเภทสินค้า"],
+}
+AGE_LABELS = ["ตรงเวลา", "ช้า 1–30 วัน", "ช้า 31–60 วัน", "ช้า 61–90 วัน", "ช้าเกิน 90 วัน"]
+AGE_COLORS = ["#86CFA3", "#EFCB64", "#F6AE6B", "#EE8A7C", "#C23B53"]
+CLS_NAMES = ["ลูกหนี้ชั้นดี", "ลูกหนี้เฝ้าติดตาม", "ลูกหนี้ด้อยคุณภาพ (NPL)", "ไม่ระบุ"]
+CLS_COLORS = ["#86CFA3", "#F6AE6B", "#E0566C", "#CBD5E1"]
+
+CUST_CSS = """
+<style>
+.cu-kpi { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px; margin:6px 0 10px; }
+.cu-kpi div.b { background:#FFF8F9; border:1px solid #F6DDE2; border-radius:14px; padding:10px 14px; min-width:0; }
+.cu-kpi .k { font-size:12px; color:#64748B; font-weight:600; }
+.cu-kpi .v { font-size:20px; font-weight:800; color:#0F172A; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.cu-kpi .s { font-size:11.5px; color:#94A3B8; }
+@media (max-width:1100px){ .cu-kpi { grid-template-columns:repeat(2, minmax(0,1fr)); } }
+.cu-name { max-width:260px; display:inline-block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+.cu-beh { display:inline-block; font-size:11.5px; font-weight:700; padding:2px 9px; border-radius:99px; white-space:nowrap; }
+.cu-age { display:flex; height:10px; border-radius:99px; overflow:hidden; background:#F1F5F9; min-width:120px; }
+.cu-age span { display:block; height:100%; }
+.cu-story { background:#F8FAFC; border:1px solid #E2E8F0; border-radius:14px; padding:12px 16px; font-size:14px;
+            color:#1E293B; line-height:1.7; margin:8px 0 4px; }
+.cu-story b { font-variant-numeric:tabular-nums; }
+.cu-rec { margin-top:6px; font-weight:700; }
+</style>
+"""
+
+
+def _nk(v) -> str:
+    return re.sub(r"[\s_\-\.\(\)]+", "", str(v)).casefold()
+
+
+def find_customer_file():
+    if not DATA_FOLDER.exists():
+        return None
+    key = _nk(CUST_KEYWORD)
+    files = [f for f in DATA_FOLDER.iterdir()
+             if f.is_file() and f.suffix.lower() in {".xlsx", ".xlsm"} and not f.name.startswith("~$")
+             and key in _nk(f.stem)]
+    return max(files, key=lambda f: f.stat().st_mtime_ns) if files else None
+
+
+def _cls_idx(v) -> int:
+    k = _nk(v) if isinstance(v, str) else ""
+    if not k:
+        return 3
+    if any(t in k for t in ("ด้อย", "npl", "nonperforming", "สูญ")):
+        return 2
+    if any(t in k for t in ("เฝ้า", "ติดตาม", "underperforming")):
+        return 1
+    return 0 if "ดี" in k or "performing" in k else 3
+
+
+def _behavior(r):
+    """(ป้าย, สี, คำแนะนำ) จากพฤติกรรมการจ่าย"""
+    if r["B4"] > 0 or r["Cls"] == 2:
+        return "มีหนี้ช้าเกิน 90 วัน", C_BAD, "ระงับเครดิต/ให้ชำระก่อนส่งของ และติดตามหนี้อย่างเข้มงวด"
+    rate = r["LateRate"]
+    if pd.isna(rate):
+        return "ไม่มีข้อมูลการจ่าย", "#94A3B8", "—"
+    if rate == 0:
+        return "จ่ายตรงเวลาเสมอ", C_GOOD, "ลูกค้าคุณภาพดี รักษาความสัมพันธ์และพิจารณาขยายงาน"
+    if rate <= 0.25:
+        return "ส่วนใหญ่ตรงเวลา", C_OK, "ติดตามตามปกติ"
+    if rate <= 0.5:
+        return "จ่ายช้าบางครั้ง", C_WARN, "โทรเตือนก่อนครบกำหนด"
+    return "จ่ายช้าเป็นประจำ", C_BAD, "ทบทวนเครดิตเทอม หรือกำหนดเงื่อนไขการชำระที่เข้มขึ้น"
+
+
+@st.cache_data(show_spinner=False)
+def load_customer_file(path_str: str, mtime_ns: int):
+    xl = pd.ExcelFile(path_str)
+    best = None
+    for sheet in xl.sheet_names:
+        raw = xl.parse(sheet, header=None, nrows=20)
+        for i, row in raw.iterrows():
+            keys = {_nk(v) for v in row.tolist() if isinstance(v, str)}
+            if any(_nk(n) in keys for n in CUST_COLS["name"]) and any(
+                    _nk(n) in keys for n in CUST_COLS["revenue"] + CUST_COLS["profit"]):
+                best = (sheet, i)
+                break
+        if best:
+            break
+    if best is None:
+        raise ValueError("ไม่พบชีตที่มีคอลัมน์ ชื่อลูกหนี้ และ รายได้/กำไร")
+    df = xl.parse(best[0], header=best[1])
+    by = {}
+    for c in df.columns:
+        by.setdefault(_nk(c), c)
+    col = {}
+    for key, names in CUST_COLS.items():
+        hit = next((by[_nk(n)] for n in names if _nk(n) in by and by[_nk(n)] not in col.values()), None)
+        if hit is not None:
+            col[key] = hit
+
+    out = pd.DataFrame({"Name": df[col["name"]].astype("string").fillna("").str.strip()})
+
+    def num(key):
+        return _num(df[col[key]]) if key in col else pd.Series(float("nan"), index=df.index)
+
+    for key, name in (("bills", "Bills"), ("late_bills", "LateBills"), ("sum_delay", "SumDelay"),
+                      ("max_delay", "MaxDelay"), ("late_rate", "LateRate"), ("risk", "Risk"),
+                      ("billed", "Billed"), ("wrisk", "WRisk"), ("revenue", "Revenue"),
+                      ("cost", "Cost"), ("profit", "Profit")):
+        out[name] = num(key)
+    for i in range(5):
+        out[f"B{i}"] = num(f"b{i}").fillna(0.0)
+    out["Aging"] = df[col["aging"]].astype("string").fillna("").str.strip() if "aging" in col else ""
+    out["Product"] = df[col["product"]].astype("string").fillna("").str.strip() if "product" in col else ""
+    out["Cls"] = df[col["cls"]].map(_cls_idx) if "cls" in col else 3
+
+    # ตัดแถวที่มีแต่ชื่อ ไม่มีตัวเลข
+    nums = ["Bills", "Revenue", "Cost", "Profit", "Billed"]
+    out = out[out["Name"].ne("") & out[nums].notna().any(axis=1)].copy()
+    # ค่าที่คำนวณเองได้ถ้าไฟล์ไม่มี
+    if out["LateRate"].isna().all() and out["Bills"].notna().any():
+        out["LateRate"] = out["LateBills"] / out["Bills"].where(out["Bills"] > 0)
+    rate = out["LateRate"].dropna()
+    if not rate.empty and rate.abs().median() > 1.5:  # เก็บเป็น 25 แทน 0.25
+        out["LateRate"] = out["LateRate"] / 100
+    out["Profit"] = out["Profit"].fillna(out["Revenue"] - out["Cost"])
+    out["Billed"] = out["Billed"].fillna(out[[f"B{i}" for i in range(5)]].sum(axis=1))
+    out["Margin"] = out["Profit"] / out["Revenue"].where(out["Revenue"] != 0)
+    out["LateAmt"] = out[["B1", "B2", "B3", "B4"]].sum(axis=1)
+    out["LateAmtShare"] = out["LateAmt"] / out["Billed"].where(out["Billed"] > 0)
+    out["AvgDelay"] = out["SumDelay"] / out["LateBills"].where(out["LateBills"] > 0)
+    beh = out.apply(_behavior, axis=1, result_type="expand")
+    out["Behavior"], out["BehColor"], out["Advice"] = beh[0], beh[1], beh[2]
+    return out.drop_duplicates("Name", keep="last").reset_index(drop=True)
+
+
+def _beh_badge(text, color) -> str:
+    return f'<span class="cu-beh" style="background:{_tint(color, 0.78)};color:{color}">{esc(str(text))}</span>'
+
+
+def _age_bar(r) -> str:
+    total = sum(float(r[f"B{i}"]) for i in range(5))
+    if total <= 0:
+        return '<span class="tc-muted">—</span>'
+    parts = "".join(
+        f'<span style="width:{float(r[f"B{i}"]) / total * 100:.1f}%;background:{AGE_COLORS[i]}" '
+        f'title="{AGE_LABELS[i]} {ff(r[f"B{i}"])}"></span>'
+        for i in range(5) if r[f"B{i}"] > 0
+    )
+    return f'<div class="cu-age">{parts}</div>'
+
+
+def render_customer_overview():
+    path = find_customer_file()
+    if path is None:
+        return  # ยังไม่มีไฟล์ ไม่ต้องแสดงส่วนนี้
+    try:
+        cu = load_customer_file(str(path), path.stat().st_mtime_ns)
+    except Exception as e:
+        st.warning(f"อ่านไฟล์ {path.name} ไม่สำเร็จ: {e}")
+        return
+    if cu.empty:
+        st.info(f"ไฟล์ {path.name} ไม่มีข้อมูลลูกค้า")
+        return
+
+    st.markdown(CUST_CSS, unsafe_allow_html=True)
+    with _card("do_customers"):
+        st.markdown("#### ภาพรวมลูกค้า: รายได้ ต้นทุน กำไร × พฤติกรรมการจ่ายหนี้")
+        st.caption(f"ข้อมูลจากไฟล์ {path.name} (รายลูกค้า) · ตัวกรองด้านบนของหน้านี้ไม่มีผลกับส่วนนี้ · "
+                   "ต้นทุน = ต้นทุนที่ปันส่วนให้ลูกค้าในไฟล์")
+
+        c1, c2, c3 = st.columns([1.2, 1.4, 2.4])
+        with c1:
+            prods = sorted(p for p in cu["Product"].unique() if p)
+            pick_prod = st.multiselect("ประเภทสินค้าหลัก", prods, placeholder="ทั้งหมด",
+                                       key=_wkey("do_cu_prod", prods))
+        with c2:
+            behs = [b for b in ["จ่ายตรงเวลาเสมอ", "ส่วนใหญ่ตรงเวลา", "จ่ายช้าบางครั้ง", "จ่ายช้าเป็นประจำ",
+                                "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"] if (cu["Behavior"] == b).any()]
+            pick_beh = st.multiselect("พฤติกรรมการจ่าย", behs, placeholder="ทั้งหมด", key=_wkey("do_cu_beh", behs))
+        with c3:
+            search = st.text_input("ค้นหาลูกค้า", placeholder="พิมพ์ชื่อบางส่วน", key="do_cu_search")
+        view = cu
+        if pick_prod:
+            view = view[view["Product"].isin(pick_prod)]
+        if pick_beh:
+            view = view[view["Behavior"].isin(pick_beh)]
+        if search.strip():
+            view = view[view["Name"].str.contains(search.strip(), case=False, regex=False, na=False)]
+        if view.empty:
+            st.info("ไม่มีลูกค้าตามตัวกรอง")
+            return
+
+        rev, cost, prof = view["Revenue"].sum(), view["Cost"].sum(), view["Profit"].sum()
+        on_time = (view["LateRate"] == 0).sum()
+        with_rate = view["LateRate"].notna().sum()
+        late_amt, billed = view["LateAmt"].sum(), view["Billed"].sum()
+        loss_n = int((view["Profit"] < 0).sum())
+        st.markdown(
+            '<div class="cu-kpi">'
+            f'<div class="b"><div class="k">ลูกค้า</div><div class="v">{len(view):,} ราย</div>'
+            f'<div class="s">ขาดทุน {loss_n:,} ราย</div></div>'
+            f'<div class="b"><div class="k">รายได้รวม</div><div class="v">{fm(rev)}</div>'
+            f'<div class="s">เฉลี่ย {fm(rev / len(view))} ต่อราย</div></div>'
+            f'<div class="b"><div class="k">ต้นทุนที่ปันส่วน</div><div class="v">{fm(cost)}</div>'
+            f'<div class="s">{fp(_div(cost, rev))} ของรายได้</div></div>'
+            f'<div class="b"><div class="k">กำไร</div><div class="v {sign_cls(prof)}">{fm(prof)}</div>'
+            f'<div class="s">อัตรากำไร {fp(_div(prof, rev))}</div></div>'
+            f'<div class="b"><div class="k">จ่ายตรงเวลาเสมอ</div>'
+            f'<div class="v">{fp(_div(on_time, with_rate))}</div>'
+            f'<div class="s">ของลูกค้า · ยอดที่จ่ายช้า {fp(_div(late_amt, billed))} ของยอดวางบิล</div></div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        # ---------- กราฟ กำไร × จ่ายช้า ----------
+        q = view[view["Margin"].notna() & view["LateRate"].notna() & (view["Revenue"] > 0)].copy()
+        if not q.empty:
+            p1, p2, _p3 = st.columns([1, 1, 2])
+            overall_margin = _div(q["Profit"].sum(), q["Revenue"].sum())
+            with p1:
+                m_opts = ["ค่าเฉลี่ยทุกลูกค้า", "0% (กำไร/ขาดทุน)", "20%", "30%", "40%"]
+                m_pick = st.selectbox("เส้นแบ่ง “กำไรดี”", m_opts, key="do_cu_mline")
+            with p2:
+                late_line = st.selectbox("เส้นแบ่ง “จ่ายช้า” เมื่อบิลช้าเกิน", [10, 25, 50], index=1,
+                                         format_func=lambda v: f"{v}%", key="do_cu_lline")
+            m_line = {"ค่าเฉลี่ยทุกลูกค้า": overall_margin, "0% (กำไร/ขาดทุน)": 0.0,
+                      "20%": 0.2, "30%": 0.3, "40%": 0.4}[m_pick]
+            m_line = 0.0 if pd.isna(m_line) else m_line
+            q["x"] = (q["Margin"] * 100).clip(-100, 100)
+            q["y"] = q["LateRate"] * 100
+            good_m, late = q["Margin"] >= m_line, q["LateRate"] > late_line / 100
+            groups = [
+                ("⭐ กำไรดี + จ่ายตรง", "รักษาไว้ / ขยายงาน", C_GOOD, good_m & ~late),
+                ("💸 กำไรดี แต่จ่ายช้า", "ตามหนี้ / ลดเครดิตเทอม", C_WARN, good_m & late),
+                ("🏷️ จ่ายตรง แต่กำไรต่ำ", "ทบทวนราคา / ต้นทุน", C_OK, ~good_m & ~late),
+                ("⚠️ กำไรต่ำ + จ่ายช้า", "ขึ้นราคา / เข้มงวดเงื่อนไขชำระ", C_BAD, ~good_m & late),
+            ]
+            mx = float(q["Revenue"].max()) or 1.0
+            fig = go.Figure()
+            for name, _a, colr, m in groups:
+                part = q[m]
+                if part.empty:
+                    continue
+                fig.add_trace(go.Scatter(
+                    name=f"{name} ({len(part):,})", x=part["x"], y=part["y"], mode="markers",
+                    marker=dict(size=8 + 30 * (part["Revenue"] / mx) ** 0.5, color=colr, opacity=0.75,
+                                line=dict(color="white", width=1.2)),
+                    customdata=part[["Name", "Revenue", "Profit", "Bills", "LateBills", "MaxDelay",
+                                     "Behavior"]].to_numpy(),
+                    hovertemplate=("<b>%{customdata[0]}</b><br>รายได้ ฿%{customdata[1]:,.0f} · "
+                                   "กำไร ฿%{customdata[2]:,.0f} (%{x:.1f}%)"
+                                   "<br>บิลช้า %{customdata[4]:,.0f}/%{customdata[3]:,.0f} (%{y:.0f}%) · "
+                                   "ช้าสุด %{customdata[5]:,.0f} วัน<br>%{customdata[6]}<extra></extra>"),
+                ))
+            fig.add_vline(x=m_line * 100, line=dict(color="#94A3B8", width=1.5, dash="dash"))
+            fig.add_hline(y=late_line, line=dict(color="#94A3B8", width=1.5, dash="dash"))
+            fig.update_layout(
+                height=440, margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", y=-0.16, x=0),
+                xaxis=dict(title="อัตรากำไร (% ของรายได้) — ยิ่งขวายิ่งกำไรดี", ticksuffix="%", zeroline=False),
+                yaxis=dict(title="% บิลที่จ่ายช้า — ยิ่งสูงยิ่งจ่ายช้า", ticksuffix="%", range=[-5, 105],
+                           zeroline=False),
+            )
+            _style(fig)
+            st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+            st.markdown(
+                '<div class="do-quad">' + "".join(
+                    f'<div style="background:{_tint(colr, 0.88)}">{esc(name)}<b>{int(m.sum()):,} ราย</b>'
+                    f'รายได้ {fm(q.loc[m, "Revenue"].sum())} · กำไร {fm(q.loc[m, "Profit"].sum())}'
+                    f'<small>👉 {esc(action)}</small></div>'
+                    for name, action, colr, m in groups
+                ) + "</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption("วงกลม = ลูกค้า 1 ราย · วงใหญ่ = รายได้สูง · ชี้เมาส์เพื่อดูรายละเอียด · "
+                       "อัตรากำไรที่เกิน ±100% แสดงที่ขอบกราฟ")
+
+        # ---------- ตารางลูกค้า ----------
+        sort_map = {"รายได้สูงสุด": ("Revenue", False), "กำไรสูงสุด": ("Profit", False),
+                    "ขาดทุนมากสุด": ("Profit", True), "อัตรากำไรต่ำสุด": ("Margin", True),
+                    "% บิลช้ามากสุด": ("LateRate", False), "ช้าสูงสุด (วัน)": ("MaxDelay", False),
+                    "ยอดจ่ายช้ามากสุด": ("LateAmt", False)}
+        s1, s2 = st.columns([1.4, 0.6])
+        with s1:
+            sort_label = st.selectbox("เรียงตาม", list(sort_map), key="do_cu_sort")
+        with s2:
+            top_n = st.selectbox("แสดง", [20, 50, 100, 300], index=1, format_func=lambda v: f"{v} ราย",
+                                 key="do_cu_top")
+        col, asc = sort_map[sort_label]
+        tb = view.sort_values([col, "Revenue"], ascending=[asc, False], na_position="last")
+        head = ["#", "ลูกค้า", "สินค้าหลัก", "รายได้", "ต้นทุน", "กำไร", "อัตรากำไร", "บิล (ช้า/ทั้งหมด)",
+                "ช้าสูงสุด", "ยอดวางบิลตามความช้า", "ชั้นลูกหนี้", "พฤติกรรมการจ่าย"]
+        body = []
+        for i, r in enumerate(tb.head(top_n).to_dict("records"), 1):
+            bills = "—" if pd.isna(r["Bills"]) else f'{int(r["LateBills"] or 0):,} / {int(r["Bills"]):,}'
+            maxd = "—" if pd.isna(r["MaxDelay"]) else f'{int(r["MaxDelay"]):,} วัน'
+            ci = int(r["Cls"])
+            body.append(
+                "<tr>"
+                f'<td class="tc-rank">{i}</td>'
+                f'<td><b><span class="cu-name" title="{esc(r["Name"])}">{esc(r["Name"])}</span></b></td>'
+                f'<td class="tc-muted">{esc(r["Product"] or "—")}</td>'
+                f'<td class="tc-num">{ff(r["Revenue"])}</td>'
+                f'<td class="tc-num tc-muted">{ff(r["Cost"])}</td>'
+                f'<td class="tc-num {sign_cls(r["Profit"])}">{ff(r["Profit"])}</td>'
+                f'<td class="tc-num {sign_cls(r["Margin"])}">{fp(r["Margin"])}</td>'
+                f'<td class="tc-num">{bills}</td>'
+                f'<td class="tc-num">{maxd}</td>'
+                f"<td>{_age_bar(r)}</td>"
+                f'<td>{_beh_badge(CLS_NAMES[ci], CLS_COLORS[ci])}</td>'
+                f'<td>{_beh_badge(r["Behavior"], r["BehColor"])}</td>'
+                "</tr>"
+            )
+        st.caption(f"แสดง {min(top_n, len(tb)):,} จาก {len(tb):,} ราย · แถบสี = สัดส่วนยอดวางบิลที่จ่าย "
+                   + " / ".join(f'<span style="color:{c}">■</span> {l}' for l, c in zip(AGE_LABELS, AGE_COLORS)),
+                   unsafe_allow_html=True)
+        st.markdown(_table_html(head, body, right_cols={3, 4, 5, 6, 7, 8}, max_height=480), unsafe_allow_html=True)
+        export = pd.DataFrame({
+            "ลูกค้า": tb["Name"], "สินค้าหลัก": tb["Product"], "รายได้": tb["Revenue"], "ต้นทุนที่ปันส่วน": tb["Cost"],
+            "กำไร": tb["Profit"], "อัตรากำไร": tb["Margin"], "จำนวนบิล": tb["Bills"], "บิลที่ช้า": tb["LateBills"],
+            "% บิลที่ช้า": tb["LateRate"], "วันช้าสูงสุด": tb["MaxDelay"], "วันช้าเฉลี่ย (บิลที่ช้า)": tb["AvgDelay"],
+            **{f"ยอด{AGE_LABELS[i]}": tb[f"B{i}"] for i in range(5)},
+            "ชั้นลูกหนี้": tb["Cls"].map(lambda i: CLS_NAMES[int(i)]), "พฤติกรรมการจ่าย": tb["Behavior"],
+            "คำแนะนำ": tb["Advice"],
+        })
+        st.download_button("⬇️ ดาวน์โหลดรายชื่อลูกค้า (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
+                           file_name="customer_profit_payment.csv", mime="text/csv", key="do_cu_dl")
+
+        # ---------- เจาะรายลูกค้า ----------
+        st.markdown("##### เจาะรายลูกค้า")
+        opts = view.sort_values("Revenue", ascending=False)["Name"].tolist()
+        pick = st.selectbox("เลือกลูกค้า", opts, key=_wkey("do_cu_pick", opts))
+        r = view[view["Name"] == pick].iloc[0]
+        rank = int((cu["Revenue"] > r["Revenue"]).sum()) + 1
+        boxes = [
+            ("รายได้", fm(r["Revenue"]), f"อันดับ {rank:,} จาก {len(cu):,} ราย"),
+            ("ต้นทุนที่ปันส่วน", fm(r["Cost"]), f'{fp(_div(r["Cost"], r["Revenue"]))} ของรายได้'),
+            ("กำไร", fm(r["Profit"]), f'อัตรากำไร {fp(r["Margin"])}'),
+            ("สินค้าหลัก", r["Product"] or "—", "ประเภทสินค้าที่ทำรายได้สูงสุด"),
+            ("บิลที่จ่ายช้า", "—" if pd.isna(r["Bills"]) else f'{int(r["LateBills"] or 0):,} / {int(r["Bills"]):,}',
+             f'{fp(r["LateRate"])} ของบิลทั้งหมด'),
+            ("ช้าสูงสุด / เฉลี่ย", "—" if pd.isna(r["MaxDelay"]) else f'{int(r["MaxDelay"]):,} วัน',
+             "—" if pd.isna(r["AvgDelay"]) else f'เฉลี่ย {r["AvgDelay"]:,.1f} วันต่อบิลที่ช้า'),
+            ("ยอดวางบิลที่จ่ายช้า", fm(r["LateAmt"]), f'{fp(r["LateAmtShare"])} ของยอดวางบิล {fm(r["Billed"])}'),
+            ("ชั้นลูกหนี้", CLS_NAMES[int(r["Cls"])], r["Aging"] or "—"),
+        ]
+        st.markdown(
+            '<div class="do-box-grid">' + "".join(
+                f'<div class="do-box"><div class="k">{esc(k)}</div><div class="v" title="{esc(str(v))}">{esc(str(v))}</div>'
+                f'<div class="s">{esc(str(s))}</div></div>' for k, v, s in boxes
+            ) + "</div>",
+            unsafe_allow_html=True,
+        )
+        profit_txt = ("มีกำไร" if r["Profit"] >= 0 else "ขาดทุน")
+        story = (
+            f'ลูกค้ารายนี้สร้างรายได้ <b>{fm(r["Revenue"])}</b> (อันดับ {rank:,} จาก {len(cu):,} ราย) '
+            f'หลังหักต้นทุน <b>{fm(r["Cost"])}</b> {profit_txt} <b class="{sign_cls(r["Profit"])}">{fm(r["Profit"])}</b> '
+            f'(อัตรากำไร {fp(r["Margin"])} เทียบค่าเฉลี่ย {fp(_div(cu["Profit"].sum(), cu["Revenue"].sum()))})'
+        )
+        if pd.notna(r["Bills"]):
+            story += (f' · วางบิล {int(r["Bills"]):,} บิล จ่ายช้า {int(r["LateBills"] or 0):,} บิล '
+                      f'({fp(r["LateRate"])})')
+            if pd.notna(r["MaxDelay"]) and r["MaxDelay"] > 0:
+                story += f' ช้าสุด {int(r["MaxDelay"]):,} วัน'
+        story += f' · พฤติกรรม: {_beh_badge(r["Behavior"], r["BehColor"])}'
+        story += f'<div class="cu-rec">👉 {esc(r["Advice"])}</div>'
+        st.markdown(f'<div class="cu-story">{story}</div>', unsafe_allow_html=True)
+        st.markdown(_age_bar(r), unsafe_allow_html=True)
+        st.caption("แถบสี = สัดส่วนยอดวางบิลของลูกค้ารายนี้ แยกตามความช้าในการจ่าย")
+
+
+def render_direction_overview_dashboard():
+    """ภาพรวมรายทิศทาง + ภาพรวมลูกค้า (สองส่วนทำงานแยกกัน ส่วนหนึ่งพังไม่กระทบอีกส่วน)"""
+    _render_direction_main()
+    try:
+        render_customer_overview()
+    except Exception as e:
+        if getattr(type(e), "__module__", "").startswith("streamlit"):
+            raise
+        st.warning(f"ส่วน “ภาพรวมลูกค้า” แสดงไม่ได้ ({type(e).__name__}: {e})")
