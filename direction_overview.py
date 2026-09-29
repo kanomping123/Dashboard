@@ -1299,7 +1299,7 @@ CUST_COLS = {
     "product": ["ประเภทสินค้ารายได้สูงสุด", "ประเภทสินค้าหลัก", "ประเภทสินค้า"],
 }
 AGE_LABELS = ["ตรงเวลา", "ช้า 1–30 วัน", "ช้า 31–60 วัน", "ช้า 61–90 วัน", "ช้าเกิน 90 วัน"]
-AGE_COLORS = ["#2F6690", "#8FB3DE", "#F2B880", "#E07A5F", "#C8102E"]  # ตรงเวลา → เกิน 90 วัน
+AGE_COLORS = ["#86CFA3", "#EFCB64", "#F6AE6B", "#EE8A7C", "#E0566C"]  # พาสเทลเดียวกับหน้าลูกหนี้
 CLS_NAMES = ["ลูกหนี้ชั้นดี", "ลูกหนี้เฝ้าติดตาม", "ลูกหนี้ด้อยคุณภาพ (NPL)", "ไม่ระบุ"]
 CLS_COLORS = ["#86CFA3", "#F6AE6B", "#E0566C", "#CBD5E1"]
 
@@ -1521,17 +1521,17 @@ def _age_bar(r) -> str:
 # เกณฑ์ของฝ่ายบัญชี (ความหมายตามชีต เงื่อนไข ของรายงานลูกหนี้)
 GROUP_BASES = {
     "การแบ่งชั้นลูกหนี้ (TFRS 9)": ("ClsIdx", [
-        ("ลูกหนี้ชั้นดี", "#2F6690", "ไม่ค้างชำระ หรือค้างไม่เกิน 30 วัน — ความเสี่ยงด้านเครดิตยังไม่เพิ่มขึ้น ถือเป็นลูกหนี้ปกติ"),
-        ("ลูกหนี้เฝ้าติดตาม", "#F2B880", "ค้างชำระ 31–90 วัน — ความเสี่ยงด้านเครดิตเพิ่มขึ้นอย่างมีนัยสำคัญ ควรเพิ่มความเข้มงวดในการติดตามทวงถาม"),
-        ("ลูกหนี้ด้อยคุณภาพ (NPL)", "#C8102E", "ค้างชำระเกิน 90 วัน — ผิดนัดชำระและมีการด้อยค่าด้านเครดิต อาจต้องพิจารณาระงับการขายและตั้งสำรองหนี้สูญ"),
+        ("ลูกหนี้ชั้นดี", "#86CFA3", "ไม่ค้างชำระ หรือค้างไม่เกิน 30 วัน — ความเสี่ยงด้านเครดิตยังไม่เพิ่มขึ้น ถือเป็นลูกหนี้ปกติ"),
+        ("ลูกหนี้เฝ้าติดตาม", "#F6AE6B", "ค้างชำระ 31–90 วัน — ความเสี่ยงด้านเครดิตเพิ่มขึ้นอย่างมีนัยสำคัญ ควรเพิ่มความเข้มงวดในการติดตามทวงถาม"),
+        ("ลูกหนี้ด้อยคุณภาพ (NPL)", "#E0566C", "ค้างชำระเกิน 90 วัน — ผิดนัดชำระและมีการด้อยค่าด้านเครดิต อาจต้องพิจารณาระงับการขายและตั้งสำรองหนี้สูญ"),
         ("ไม่มีข้อมูลลูกหนี้", "#CBD5E1", "—"),
     ]),
     "กลุ่มช่วงอายุลูกหนี้": ("AgeIdx", [
-        ("ชำระตรงเวลา", "#2F6690", "ความเสี่ยงต่ำสุด ไม่ต้องตั้งค่าเผื่อหนี้สงสัยจะสูญ"),
-        ("ค้างชำระ 1–30 วัน", "#8FB3DE", "ความเสี่ยงต่ำ ยังอยู่ในเกณฑ์ติดตามทวงถามได้ปกติ"),
-        ("ค้างชำระ 31–60 วัน", "#F2B880", "ความเสี่ยงปานกลาง ควรเพิ่มความเข้มงวดในการติดตาม"),
-        ("ค้างชำระ 61–90 วัน", "#E07A5F", "ความเสี่ยงสูง อาจพิจารณาระงับการขายชั่วคราว"),
-        ("ค้างชำระเกิน 90 วัน", "#C8102E", "ความเสี่ยงสูงมาก ถือเป็นหนี้ด้อยคุณภาพ (NPL) ควรพิจารณาตั้งค่าเผื่อหนี้สงสัยจะสูญในอัตราที่สูง"),
+        ("ชำระตรงเวลา", "#86CFA3", "ความเสี่ยงต่ำสุด ไม่ต้องตั้งค่าเผื่อหนี้สงสัยจะสูญ"),
+        ("ค้างชำระ 1–30 วัน", "#EFCB64", "ความเสี่ยงต่ำ ยังอยู่ในเกณฑ์ติดตามทวงถามได้ปกติ"),
+        ("ค้างชำระ 31–60 วัน", "#F6AE6B", "ความเสี่ยงปานกลาง ควรเพิ่มความเข้มงวดในการติดตาม"),
+        ("ค้างชำระ 61–90 วัน", "#EE8A7C", "ความเสี่ยงสูง อาจพิจารณาระงับการขายชั่วคราว"),
+        ("ค้างชำระเกิน 90 วัน", "#E0566C", "ความเสี่ยงสูงมาก ถือเป็นหนี้ด้อยคุณภาพ (NPL) ควรพิจารณาตั้งค่าเผื่อหนี้สงสัยจะสูญในอัตราที่สูง"),
         ("ไม่มีข้อมูลลูกหนี้", "#CBD5E1", "—"),
     ]),
 }
@@ -1591,22 +1591,24 @@ def _customer_charts(view: pd.DataFrame, view_pay: bool, basis: str):
             labels = [f"{k}<br><span style='font-size:11px;color:#64748B'>{int(r.N):,} ราย</span>"
                       for k, r in g.iterrows()]
             fig = go.Figure()
-            for name, col, colr in (("รายได้", "Rev", "#1F3A5F"), ("ต้นทุน", "Cost", "#B8C4D6"),
-                                    ("กำไร", "Profit", "#2A9D8F")):
+            for name, col, colr in (("รายได้", "Rev", C_REV), ("ต้นทุน", "Cost", C_COST),
+                                    ("กำไร", "Profit", "#86CFA3")):
                 fig.add_trace(go.Bar(name=name, x=labels, y=g[col], marker_color=colr,
                                      hovertemplate=f"{name} ฿%{{y:,.0f}}<extra></extra>"))
             fig.add_trace(go.Scatter(
                 name="อัตรากำไร", x=labels, y=g["Margin"] * 100, yaxis="y2", mode="lines+markers+text",
-                line=dict(color="#C8102E", width=2.5), marker=dict(size=8, color="#C8102E"),
+                line=dict(color="#9B7BD1", width=2.5), marker=dict(size=8, color="#9B7BD1",
+                                                                    line=dict(color="white", width=1.5)),
                 text=[f"{v * 100:.0f}%" if pd.notna(v) else "" for v in g["Margin"]], textposition="top center",
-                textfont=dict(color="#C8102E"),
+                textfont=dict(color="#7B5BB5", size=12),
                 hovertemplate="อัตรากำไร %{y:.1f}%<extra></extra>",
             ))
             fig.update_layout(
                 barmode="group", height=360, margin=dict(l=10, r=10, t=20, b=10), bargap=0.25,
                 legend=dict(orientation="h", y=1.12, x=0),
-                yaxis=dict(title="บาท", tickformat=",.0f"),
-                yaxis2=dict(overlaying="y", side="right", ticksuffix="%", showgrid=False, rangemode="tozero"),
+                yaxis=dict(title="บาท", tickformat=",.2s"),
+                yaxis2=dict(overlaying="y", side="right", ticksuffix="%", showgrid=False, rangemode="tozero",
+                            tickformat=".0f", nticks=5),
                 xaxis=dict(type="category"),
             )
             _style(fig)
@@ -1625,14 +1627,15 @@ def _customer_charts(view: pd.DataFrame, view_pay: bool, basis: str):
             fig = go.Figure(go.Pie(
                 labels=AGE_LABELS, values=amt.values, hole=0.62, sort=False,
                 marker=dict(colors=AGE_COLORS, line=dict(color="white", width=2)),
-                textinfo="percent", textposition="outside",
+                text=[f"{v / amt.sum() * 100:.0f}%" if v / amt.sum() >= 0.03 else "" for v in amt.values],
+                textinfo="text", textposition="outside", textfont=dict(size=12, color="#475569"),
                 hovertemplate="%{label}<br>฿%{value:,.0f}<br>%{percent}<extra></extra>",
             ))
             fig.update_layout(
                 height=360, margin=dict(l=10, r=10, t=20, b=10),
                 legend=dict(orientation="h", y=-0.08, x=0, font=dict(size=11)),
                 annotations=[dict(text=f"<span style='font-size:11px;color:#64748B'>จ่ายช้า</span><br>"
-                                       f"<b style='font-size:20px;color:#C8102E'>{late_share * 100:.0f}%</b><br>"
+                                       f"<b style='font-size:20px;color:#E0566C'>{late_share * 100:.0f}%</b><br>"
                                        f"<span style='font-size:11px;color:#64748B'>ของยอด {fm(amt.sum())}</span>",
                                   x=0.5, y=0.5, showarrow=False)],
             )
