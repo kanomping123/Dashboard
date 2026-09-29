@@ -1348,22 +1348,6 @@ def _cls_idx(v) -> int:
     return 0 if "ดี" in k or "performing" in k else 3
 
 
-def _behavior(r):
-    """(ป้าย, สี, คำแนะนำ) จากพฤติกรรมการจ่าย"""
-    if r["B4"] > 0 or r["Cls"] == 2:
-        return "มีหนี้ช้าเกิน 90 วัน", C_BAD, "ระงับเครดิต/ให้ชำระก่อนส่งของ และติดตามหนี้อย่างเข้มงวด"
-    rate = r["LateRate"]
-    if pd.isna(rate):
-        return "ไม่มีข้อมูลการจ่าย", "#94A3B8", "—"
-    if rate == 0:
-        return "จ่ายตรงเวลาเสมอ", C_GOOD, "ลูกค้าคุณภาพดี รักษาความสัมพันธ์และพิจารณาขยายงาน"
-    if rate <= 0.25:
-        return "ส่วนใหญ่ตรงเวลา", C_OK, "ติดตามตามปกติ"
-    if rate <= 0.5:
-        return "จ่ายช้าบางครั้ง", C_WARN, "โทรเตือนก่อนครบกำหนด"
-    return "จ่ายช้าเป็นประจำ", C_BAD, "ทบทวนเครดิตเทอม หรือกำหนดเงื่อนไขการชำระที่เข้มขึ้น"
-
-
 NUM_FIELDS = (("bills", "Bills"), ("late_bills", "LateBills"), ("sum_delay", "SumDelay"),
               ("max_delay", "MaxDelay"), ("late_rate", "LateRate"), ("risk", "Risk"),
               ("billed", "Billed"), ("wrisk", "WRisk"), ("revenue", "Revenue"),
@@ -1493,24 +1477,26 @@ def load_customer_file(path_str: str, mtime_ns: int, ar_path_str: str = "", ar_m
     out["AvgDelay"] = out["SumDelay"] / out["LateBills"].where(out["LateBills"] > 0)
     out["HasPay"] = (out["Bills"].notna() | out["LateRate"].notna()
                      | out[[f"B{i}" for i in range(5)]].sum(axis=1).gt(0))
-    rate = out["LateRate"]
-    rules = [
-        (out["B4"].gt(0) | out["Cls"].eq(2), "มีหนี้ช้าเกิน 90 วัน", C_BAD,
-         "ระงับเครดิต/ให้ชำระก่อนส่งของ และติดตามหนี้อย่างเข้มงวด"),
-        (~out["HasPay"] | rate.isna(), "ไม่มีข้อมูลการจ่าย", "#94A3B8", "—"),
-        (rate.eq(0), "จ่ายตรงเวลาเสมอ", C_GOOD, "ลูกค้าคุณภาพดี รักษาความสัมพันธ์และพิจารณาขยายงาน"),
-        (rate.le(0.25), "ส่วนใหญ่ตรงเวลา", C_OK, "ติดตามตามปกติ"),
-        (rate.le(0.5), "จ่ายช้าบางครั้ง", C_WARN, "โทรเตือนก่อนครบกำหนด"),
-    ]
-    out["Behavior"], out["BehColor"], out["Advice"] = (
-        "จ่ายช้าเป็นประจำ", C_BAD, "ทบทวนเครดิตเทอม หรือกำหนดเงื่อนไขการชำระที่เข้มขึ้น")
-    done = pd.Series(False, index=out.index)
-    for mask, label, color, advice in rules:
-        m = mask.fillna(False) & ~done
-        out.loc[m, "Behavior"], out.loc[m, "BehColor"], out.loc[m, "Advice"] = label, color, advice
-        done |= m
+    # ---- กลุ่มลูกค้าตามเกณฑ์ของฝ่ายบัญชี (คอลัมน์ในชีตสรุปลูกหนี้) ----
+    ci = out["Cls"].where(out["HasPay"], 3).fillna(3).astype(int)
+    out["ClsIdx"] = ci
+    ai = out["Aging"].map(_age_idx)
+    # ไม่มีข้อความกลุ่มอายุ: ใช้ช่วงที่แย่ที่สุดที่มียอดในคอลัมน์ ยอดค้าง…
+    worst = pd.Series(0, index=out.index)
+    for i in range(1, 5):
+        worst = worst.where(out[f"B{i}"].le(0), i)
+    ai = ai.fillna(worst.where(out["HasPay"])).fillna(5).astype(int)
+    out["AgeIdx"] = ai.where(out["HasPay"], 5)
     out = out.drop_duplicates("Name", keep="last").reset_index(drop=True)
     return out, pay_found, pay_src, profit_sheet
+
+
+def _grp_cell(basis, i) -> str:
+    groups = GROUP_BASES[basis][1]
+    i = int(i) if pd.notna(i) else len(groups) - 1
+    if i >= len(groups) - 1:
+        return '<td class="tc-muted">—</td>'
+    return f"<td>{_beh_badge(groups[i][0], groups[i][1])}</td>"
 
 
 def _beh_badge(text, color) -> str:
@@ -1530,10 +1516,48 @@ def _age_bar(r) -> str:
 
 
 
-BEH_ORDER = ["จ่ายตรงเวลาเสมอ", "ส่วนใหญ่ตรงเวลา", "จ่ายช้าบางครั้ง", "จ่ายช้าเป็นประจำ",
-             "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"]
-BEH_COLORS = {"จ่ายตรงเวลาเสมอ": C_GOOD, "ส่วนใหญ่ตรงเวลา": C_OK, "จ่ายช้าบางครั้ง": C_WARN,
-              "จ่ายช้าเป็นประจำ": "#E0566C", "มีหนี้ช้าเกิน 90 วัน": "#8C1C2B", "ไม่มีข้อมูลการจ่าย": "#CBD5E1"}
+# เกณฑ์ของฝ่ายบัญชี (ความหมายตามชีต เงื่อนไข ของรายงานลูกหนี้)
+GROUP_BASES = {
+    "การแบ่งชั้นลูกหนี้ (TFRS 9)": ("ClsIdx", [
+        ("ลูกหนี้ชั้นดี", C_GOOD, "ไม่ค้างชำระ หรือค้างไม่เกิน 30 วัน — ความเสี่ยงด้านเครดิตยังไม่เพิ่มขึ้น ถือเป็นลูกหนี้ปกติ"),
+        ("ลูกหนี้เฝ้าติดตาม", C_WARN, "ค้างชำระ 31–90 วัน — ความเสี่ยงด้านเครดิตเพิ่มขึ้นอย่างมีนัยสำคัญ ควรเพิ่มความเข้มงวดในการติดตามทวงถาม"),
+        ("ลูกหนี้ด้อยคุณภาพ (NPL)", C_BAD, "ค้างชำระเกิน 90 วัน — ผิดนัดชำระและมีการด้อยค่าด้านเครดิต อาจต้องพิจารณาระงับการขายและตั้งสำรองหนี้สูญ"),
+        ("ไม่มีข้อมูลลูกหนี้", "#CBD5E1", "—"),
+    ]),
+    "กลุ่มช่วงอายุลูกหนี้": ("AgeIdx", [
+        ("ชำระตรงเวลา", "#3E9E6A", "ความเสี่ยงต่ำสุด ไม่ต้องตั้งค่าเผื่อหนี้สงสัยจะสูญ"),
+        ("ค้างชำระ 1–30 วัน", "#D4A017", "ความเสี่ยงต่ำ ยังอยู่ในเกณฑ์ติดตามทวงถามได้ปกติ"),
+        ("ค้างชำระ 31–60 วัน", "#E07B39", "ความเสี่ยงปานกลาง ควรเพิ่มความเข้มงวดในการติดตาม"),
+        ("ค้างชำระ 61–90 วัน", "#D0505C", "ความเสี่ยงสูง อาจพิจารณาระงับการขายชั่วคราว"),
+        ("ค้างชำระเกิน 90 วัน", "#8C1C2B", "ความเสี่ยงสูงมาก ถือเป็นหนี้ด้อยคุณภาพ (NPL) ควรพิจารณาตั้งค่าเผื่อหนี้สงสัยจะสูญในอัตราที่สูง"),
+        ("ไม่มีข้อมูลลูกหนี้", "#CBD5E1", "—"),
+    ]),
+}
+
+
+def _age_idx(v):
+    """ข้อความกลุ่มช่วงอายุลูกหนี้ -> 0 ตรงเวลา / 1 1–30 / 2 31–60 / 3 61–90 / 4 เกิน 90 (ไม่รู้ = None)"""
+    k = _nk(v) if isinstance(v, str) else ""
+    if not k:
+        return None
+    if "ตรงเวลา" in k or "ยังไม่ถึง" in k or "ไม่ค้าง" in k:
+        return 0
+    if "เกิน90" in k or "91" in k:
+        return 4
+    if "6190" in k:
+        return 3
+    if "3160" in k:
+        return 2
+    if "130" in k:
+        return 1
+    return None
+
+
+def _apply_group(df: pd.DataFrame, basis: str) -> pd.DataFrame:
+    col, groups = GROUP_BASES[basis]
+    idx = df[col].clip(0, len(groups) - 1).astype(int)
+    return df.assign(Behavior=idx.map(lambda i: groups[i][0]), BehColor=idx.map(lambda i: groups[i][1]),
+                     Advice=idx.map(lambda i: groups[i][2]))
 
 
 def _short(name, n=14) -> str:
@@ -1541,18 +1565,23 @@ def _short(name, n=14) -> str:
     return s if len(s) <= n else s[:n - 1] + "…"
 
 
-def _customer_charts(view: pd.DataFrame, view_pay: bool):
+def _customer_charts(view: pd.DataFrame, view_pay: bool, basis: str):
+    groups = GROUP_BASES[basis][1]
+    BEH_ORDER = [g[0] for g in groups]
+    BEH_COLORS = {g[0]: g[1] for g in groups}
+    nodata = groups[-1][0]
+    short = "ชั้นลูกหนี้ (TFRS 9)" if "TFRS" in basis else "ช่วงอายุลูกหนี้"
     """กราฟสรุป 4 ภาพ: กำไรตามพฤติกรรม · ยอดวางบิลตามความช้า · 10 รายกำไรสูงสุด · สินค้าหลัก × พฤติกรรม"""
     a, b = st.columns([1.25, 1], gap="medium")
 
     # 1) รายได้-ต้นทุน-กำไร ตามพฤติกรรมการจ่าย
     with a:
-        st.markdown("##### รายได้ ต้นทุน กำไร ตามพฤติกรรมการจ่าย")
+        st.markdown(f"##### รายได้ ต้นทุน กำไร ตาม{short}")
         g = (view.groupby("Behavior")
              .agg(N=("Name", "size"), Rev=("Revenue", "sum"), Cost=("Cost", "sum"), Profit=("Profit", "sum"))
              .reindex([x for x in BEH_ORDER if x in set(view["Behavior"])]))
         if not view_pay:
-            g = g.drop(index="ไม่มีข้อมูลการจ่าย", errors="ignore")
+            g = g.drop(index=nodata, errors="ignore")
         if g.empty:
             st.info("ไม่มีข้อมูลการจ่ายหนี้สำหรับแยกกลุ่ม")
         else:
@@ -1578,7 +1607,8 @@ def _customer_charts(view: pd.DataFrame, view_pay: bool):
             )
             _style(fig)
             st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
-            st.caption("ดูว่ากลุ่มที่จ่ายช้า ยังทำกำไรคุ้มกับความเสี่ยงหรือไม่ · เส้น = อัตรากำไรของกลุ่ม")
+            st.caption(f"กลุ่มตาม{short} จากชีตสรุปลูกหนี้ (เกณฑ์ฝ่ายบัญชี) · ดูว่ากลุ่มเสี่ยงยังทำกำไรคุ้มหรือไม่ · "
+                       "เส้น = อัตรากำไรของกลุ่ม")
 
     # 2) ยอดวางบิลแยกตามความช้า
     with b:
@@ -1635,13 +1665,13 @@ def _customer_charts(view: pd.DataFrame, view_pay: bool):
             )
             _style(fig)
             st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
-            st.caption("สีแท่ง = พฤติกรรมการจ่าย · " + " · ".join(
-                f'<span style="color:{BEH_COLORS[x]}">■</span> {x}' for x in BEH_ORDER[:5]),
+            st.caption(f"สีแท่ง = {short} · " + " · ".join(
+                f'<span style="color:{BEH_COLORS[x]}">■</span> {x}' for x in BEH_ORDER[:-1]),
                 unsafe_allow_html=True)
 
     # 4) สินค้าหลัก × พฤติกรรมการจ่าย
     with d:
-        st.markdown("##### รายได้ตามสินค้าหลัก แยกพฤติกรรมการจ่าย")
+        st.markdown(f"##### รายได้ตามสินค้าหลัก แยก{short}")
         pv = (view.assign(Product=view["Product"].replace("", "ไม่ระบุ"))
               .pivot_table(index="Product", columns="Behavior", values="Revenue", aggfunc="sum", fill_value=0))
         if pv.empty:
@@ -1661,7 +1691,7 @@ def _customer_charts(view: pd.DataFrame, view_pay: bool):
             )
             _style(fig)
             st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
-            st.caption("ดูว่าสินค้าประเภทไหน มีสัดส่วนลูกค้าที่จ่ายช้ามาก")
+            st.caption("ดูว่าสินค้าประเภทไหน มีสัดส่วนลูกค้ากลุ่มเสี่ยงมาก")
 
 
 def render_customer_overview():
@@ -1703,6 +1733,10 @@ def render_customer_overview():
                 help="ลูกค้าที่ไม่มีข้อมูลลูกหนี้ มักเป็นลูกค้าเงินสด หรือชื่อจับคู่กับรายงานลูกหนี้ไม่ได้",
             )
         base_cu = cu[cu["HasPay"]] if only_pay else cu
+        basis = st.radio("แบ่งกลุ่มลูกค้าตามเกณฑ์ฝ่ายบัญชี", list(GROUP_BASES), horizontal=True, key="do_cu_basis",
+                         help="ใช้ค่าในคอลัมน์ของชีตสรุปลูกหนี้โดยตรง · ความหมายของแต่ละกลุ่มตามชีตเงื่อนไข")
+        base_cu = _apply_group(base_cu, basis)
+        grp_names = [g[0] for g in GROUP_BASES[basis][1]]
 
         c1, c2, c3 = st.columns([1.2, 1.4, 2.4])
         with c1:
@@ -1710,9 +1744,9 @@ def render_customer_overview():
             pick_prod = st.multiselect("ประเภทสินค้าหลัก", prods, placeholder="ทั้งหมด",
                                        key=_wkey("do_cu_prod", prods))
         with c2:
-            behs = [b for b in ["จ่ายตรงเวลาเสมอ", "ส่วนใหญ่ตรงเวลา", "จ่ายช้าบางครั้ง", "จ่ายช้าเป็นประจำ",
-                                "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"] if (base_cu["Behavior"] == b).any()]
-            pick_beh = st.multiselect("พฤติกรรมการจ่าย", behs, placeholder="ทั้งหมด", key=_wkey("do_cu_beh", behs))
+            behs = [b for b in grp_names if (base_cu["Behavior"] == b).any()]
+            pick_beh = st.multiselect("ชั้นลูกหนี้" if "TFRS" in basis else "ช่วงอายุลูกหนี้", behs,
+                                      placeholder="ทั้งหมด", key=_wkey("do_cu_beh", behs))
         with c3:
             search = st.text_input("ค้นหาลูกค้า", placeholder="พิมพ์ชื่อบางส่วน", key="do_cu_search")
         view = base_cu
@@ -1752,7 +1786,7 @@ def render_customer_overview():
 
         # ---------- กราฟสรุป ----------
         try:
-            _customer_charts(view, view_pay)
+            _customer_charts(view, view_pay, basis)
         except Exception as e:  # กราฟชุดนี้ผิดพลาด ไม่ให้กระทบส่วนอื่น
             if getattr(type(e), "__module__", "").startswith("streamlit"):
                 raise
@@ -1839,7 +1873,7 @@ def render_customer_overview():
         tb = view.sort_values([col, "Revenue"], ascending=[asc, False], na_position="last")
         head = ["#", "ลูกค้า", "สินค้าหลัก", "รายได้", "ต้นทุน", "กำไร", "อัตรากำไร"]
         if view_pay:
-            head += ["บิล (ช้า/ทั้งหมด)", "ช้าสูงสุด", "ยอดวางบิลตามความช้า", "ชั้นลูกหนี้", "พฤติกรรมการจ่าย"]
+            head += ["บิล (ช้า/ทั้งหมด)", "ช้าสูงสุด", "ยอดวางบิลตามความช้า", "ชั้นลูกหนี้ (TFRS 9)", "กลุ่มช่วงอายุลูกหนี้"]
         body = []
         for i, r in enumerate(tb.head(top_n).to_dict("records"), 1):
             bills = "—" if pd.isna(r["Bills"]) else f'{int(r["LateBills"] or 0):,} / {int(r["Bills"]):,}'
@@ -1857,9 +1891,8 @@ def render_customer_overview():
                 + ((f'<td class="tc-num">{bills}</td>'
                     f'<td class="tc-num">{maxd}</td>'
                     f"<td>{_age_bar(r)}</td>"
-                    + (f'<td>{_beh_badge(CLS_NAMES[ci], CLS_COLORS[ci])}</td>' if r["HasPay"]
-                       else '<td class="tc-muted">—</td>')
-                    + f'<td>{_beh_badge(r["Behavior"], r["BehColor"])}</td>') if view_pay else "")
+                    + _grp_cell("การแบ่งชั้นลูกหนี้ (TFRS 9)", r["ClsIdx"])
+                    + _grp_cell("กลุ่มช่วงอายุลูกหนี้", r["AgeIdx"])) if view_pay else "")
                 + "</tr>"
             )
         st.caption(f"แสดง {min(top_n, len(tb)):,} จาก {len(tb):,} ราย"
@@ -1873,8 +1906,9 @@ def render_customer_overview():
             "กำไร": tb["Profit"], "อัตรากำไร": tb["Margin"], "จำนวนบิล": tb["Bills"], "บิลที่ช้า": tb["LateBills"],
             "% บิลที่ช้า": tb["LateRate"], "วันช้าสูงสุด": tb["MaxDelay"], "วันช้าเฉลี่ย (บิลที่ช้า)": tb["AvgDelay"],
             **{f"ยอด{AGE_LABELS[i]}": tb[f"B{i}"] for i in range(5)},
-            "ชั้นลูกหนี้": tb["Cls"].map(lambda i: CLS_NAMES[int(i)]), "พฤติกรรมการจ่าย": tb["Behavior"],
-            "คำแนะนำ": tb["Advice"],
+            "ชั้นลูกหนี้ (TFRS 9)": tb["ClsIdx"].map(lambda i: GROUP_BASES["การแบ่งชั้นลูกหนี้ (TFRS 9)"][1][int(i)][0]),
+            "กลุ่มช่วงอายุลูกหนี้": tb["AgeIdx"].map(lambda i: GROUP_BASES["กลุ่มช่วงอายุลูกหนี้"][1][int(i)][0]),
+            "ความหมายตามเกณฑ์ที่เลือก": tb["Advice"],
         })
         st.download_button("⬇️ ดาวน์โหลดรายชื่อลูกค้า (CSV)", export.to_csv(index=False).encode("utf-8-sig"),
                            file_name="customer_profit_payment.csv", mime="text/csv", key="do_cu_dl")
@@ -1916,9 +1950,10 @@ def render_customer_overview():
                       f'({fp(r["LateRate"])})')
             if pd.notna(r["MaxDelay"]) and r["MaxDelay"] > 0:
                 story += f' ช้าสุด {int(r["MaxDelay"]):,} วัน'
-        story += f' · พฤติกรรม: {_beh_badge(r["Behavior"], r["BehColor"])}'
+        story += f' · {esc(basis)}: {_beh_badge(r["Behavior"], r["BehColor"])}'
         if r["Advice"] != "—":
             story += f'<div class="cu-rec">👉 {esc(r["Advice"])}</div>'
+            story += '<div style="font-size:12px;color:#64748B">ความหมายตามชีตเงื่อนไข (เกณฑ์ฝ่ายบัญชี)</div>'
         st.markdown(f'<div class="cu-story">{story}</div>', unsafe_allow_html=True)
         if r["HasPay"] and r["Billed"] > 0:
             st.markdown(_age_bar(r), unsafe_allow_html=True)
