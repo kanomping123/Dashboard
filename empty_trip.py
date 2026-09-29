@@ -393,10 +393,6 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
     if has_price:
         prices = valid["Price"].dropna()
         cards.append(kpi(
-            "🏷️", "#E6F4FA", "ราคาต่อเส้นทาง (เฉลี่ย)", _money_full(prices.mean()),
-            f"ต่ำสุด {_money_full(prices.min())} · สูงสุด {_money_full(prices.max())}", "#2F7F95",
-        ))
-        cards.append(kpi(
             "⚠️", "#FDE9EC", "เที่ยวที่ต้นทุนเฉลี่ยเกินราคา", f"{len(over):,} รายการ",
             f"จาก {int(prices.size):,} รายการที่มีราคา · เทียบต้นทุนเฉลี่ยต่อเที่ยวตามตัวกรอง",
             "#C23B53" if len(over) else "#0F172A",
@@ -812,14 +808,6 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
                  f'{EMPTY} {_money(row[f"Cost_{EMPTY}"])} · {BRANCH} {_money(row[f"Cost_{BRANCH}"])}'),
                 ("ต้นทุนเฉลี่ยต่อเที่ยว", _money_full(row["AvgActual"]), "ตามตัวกรอง"),
             ]
-            if has_price and pd.notna(row["Price"]):
-                diff = row["Diff"]
-                boxes += [
-                    ("ราคาต่อเส้นทาง", _money_full(row["Price"]),
-                     f'เฉลี่ยหลังตัด outlier {_money_full(row["AvgKept"])}'),
-                    ("ส่วนต่างจากราคา", ("+" if diff > 0 else "−") + _money_full(abs(diff)),
-                     "ต้นทุนเฉลี่ยเกินราคา" if diff > 0 else "ต้นทุนเฉลี่ยต่ำกว่าราคา"),
-                ]
             if row["RevTrips"] > 0:
                 boxes.append(("เที่ยวขากลับ", f'{int(row["RevTrips"]):,} เที่ยว',
                               f'{row["RevName"]} · {_money(row["RevCost"])}'))
