@@ -1364,23 +1364,39 @@ def _behavior(r):
     return "จ่ายช้าเป็นประจำ", C_BAD, "ทบทวนเครดิตเทอม หรือกำหนดเงื่อนไขการชำระที่เข้มขึ้น"
 
 
-@st.cache_data(show_spinner=False)
-def load_customer_file(path_str: str, mtime_ns: int):
-    xl = pd.ExcelFile(path_str)
-    best = None
-    for sheet in xl.sheet_names:
-        raw = xl.parse(sheet, header=None, nrows=20)
-        for i, row in raw.iterrows():
-            keys = {_nk(v) for v in row.tolist() if isinstance(v, str)}
-            if any(_nk(n) in keys for n in CUST_COLS["name"]) and any(
-                    _nk(n) in keys for n in CUST_COLS["revenue"] + CUST_COLS["profit"]):
-                best = (sheet, i)
-                break
-        if best:
-            break
-    if best is None:
-        raise ValueError("ไม่พบชีตที่มีคอลัมน์ ชื่อลูกหนี้ และ รายได้/กำไร")
-    df = xl.parse(best[0], header=best[1])
+NUM_FIELDS = (("bills", "Bills"), ("late_bills", "LateBills"), ("sum_delay", "SumDelay"),
+              ("max_delay", "MaxDelay"), ("late_rate", "LateRate"), ("risk", "Risk"),
+              ("billed", "Billed"), ("wrisk", "WRisk"), ("revenue", "Revenue"),
+              ("cost", "Cost"), ("profit", "Profit"),
+              ("b0", "B0"), ("b1", "B1"), ("b2", "B2"), ("b3", "B3"), ("b4", "B4"))
+PAY_FIELDS = ["Bills", "LateBills", "SumDelay", "MaxDelay", "LateRate", "Risk", "Billed", "WRisk",
+              "B0", "B1", "B2", "B3", "B4"]
+PAY_KEYS = ["bills", "late_bills", "late_rate", "max_delay", "b0", "b1", "b2", "b3", "b4", "cls"]
+PAY_HEADER_HINTS = CUST_COLS["bills"] + CUST_COLS["late_rate"] + CUST_COLS["late_bills"] + CUST_COLS["cls"]
+
+
+def find_ar_report():
+    """ไฟล์รายงานลูกหนี้ (ชื่อมีคำว่า ลูกหนี้ แต่ไม่ใช่ไฟล์ เชื่อมลูกหนี้…) ใช้อ่านชีต สรุปลูกหนี้"""
+    if not DATA_FOLDER.exists():
+        return None
+    files = [f for f in DATA_FOLDER.iterdir()
+             if f.is_file() and f.suffix.lower() in {".xlsx", ".xlsm"} and not f.name.startswith("~$")
+             and "ลูกหนี้" in _nk(f.stem) and "เชื่อม" not in _nk(f.stem)]
+    return max(files, key=lambda f: ("รายงาน" in _nk(f.stem), f.stat().st_mtime_ns)) if files else None
+
+
+def _header_row(xl, sheet, hints):
+    raw = xl.parse(sheet, header=None, nrows=20)
+    names = {_nk(n) for n in CUST_COLS["name"]}
+    want = {_nk(n) for n in hints}
+    for i, row in raw.iterrows():
+        keys = {_nk(v) for v in row.tolist() if isinstance(v, str)}
+        if keys & names and keys & want:
+            return i
+    return None
+
+
+def _col_map(df) -> dict:
     by = {}
     for c in df.columns:
         by.setdefault(_nk(c), c)
@@ -1389,27 +1405,81 @@ def load_customer_file(path_str: str, mtime_ns: int):
         hit = next((by[_nk(n)] for n in names if _nk(n) in by and by[_nk(n)] not in col.values()), None)
         if hit is not None:
             col[key] = hit
+    return col
 
+
+def _frame(df, col) -> pd.DataFrame:
     out = pd.DataFrame({"Name": df[col["name"]].astype("string").fillna("").str.strip()})
-
-    def num(key):
-        return _num(df[col[key]]) if key in col else pd.Series(float("nan"), index=df.index)
-
-    for key, name in (("bills", "Bills"), ("late_bills", "LateBills"), ("sum_delay", "SumDelay"),
-                      ("max_delay", "MaxDelay"), ("late_rate", "LateRate"), ("risk", "Risk"),
-                      ("billed", "Billed"), ("wrisk", "WRisk"), ("revenue", "Revenue"),
-                      ("cost", "Cost"), ("profit", "Profit")):
-        out[name] = num(key)
-    for i in range(5):
-        out[f"B{i}"] = num(f"b{i}").fillna(0.0)
+    for key, name in NUM_FIELDS:
+        out[name] = _num(df[col[key]]) if key in col else float("nan")
     out["Aging"] = df[col["aging"]].astype("string").fillna("").str.strip() if "aging" in col else ""
     out["Product"] = df[col["product"]].astype("string").fillna("").str.strip() if "product" in col else ""
     out["Cls"] = df[col["cls"]].map(_cls_idx) if "cls" in col else 3
+    return out[out["Name"].ne("")]
 
-    # ตัดแถวที่มีแต่ชื่อ ไม่มีตัวเลข
-    nums = ["Bills", "Revenue", "Cost", "Profit", "Billed"]
-    out = out[out["Name"].ne("") & out[nums].notna().any(axis=1)].copy()
-    # ค่าที่คำนวณเองได้ถ้าไฟล์ไม่มี
+
+def _summary_sheets(xl):
+    exact = [s for s in xl.sheet_names if "สรุปลูกหนี้" in _nk(s)]
+    return exact or [s for s in xl.sheet_names if "สรุป" in _nk(s)]
+
+
+@st.cache_data(show_spinner=False)
+def load_customer_file(path_str: str, mtime_ns: int, ar_path_str: str = "", ar_mtime_ns: int = 0):
+    """คืน (ตารางรายลูกค้า, คอลัมน์การจ่ายที่พบ, แหล่งข้อมูล)
+    หลัก: ชีต สรุปลูกหนี้ ในไฟล์ เชื่อมลูกหนี้ลูกค้า (1 แถว = 1 ลูกหนี้ มีทั้งการจ่ายหนี้และรายได้/ต้นทุน/กำไร)
+    สำรอง: ถ้าชีตที่ใช้ไม่มีคอลัมน์การจ่าย จะไปจับคู่ชื่อกับชีต สรุปลูกหนี้ อื่น (ไฟล์นี้ก่อน แล้วไฟล์รายงานลูกหนี้)"""
+    xl = pd.ExcelFile(path_str)
+    profit_sheet, header = None, None
+    # ชีต "สรุปลูกหนี้" ของไฟล์เชื่อม (มีทั้งการจ่ายหนี้ + รายได้/ต้นทุน/กำไร) ใช้ก่อนชีตอื่น
+    order = sorted(xl.sheet_names, key=lambda s: 0 if "สรุปลูกหนี้" in _nk(s) else 1)
+    for sheet in order:
+        h = _header_row(xl, sheet, CUST_COLS["revenue"] + CUST_COLS["profit"])
+        if h is not None:
+            profit_sheet, header = sheet, h
+            break
+    if profit_sheet is None:
+        raise ValueError("ไม่พบชีตที่มีคอลัมน์ ชื่อลูกค้า และ รายได้/กำไร")
+    df = xl.parse(profit_sheet, header=header)
+    col = _col_map(df)
+    out = _frame(df, col)
+    out = out[out[["Revenue", "Cost", "Profit", "Bills", "Billed"]].notna().any(axis=1)]
+    pay_found = [k for k in PAY_KEYS if k in col]
+    pay_src = f"{Path(path_str).name} › {profit_sheet}" if pay_found else ""
+
+    # ---- ชีตที่ใช้ไม่มีข้อมูลการจ่าย: ไปหาจากชีต สรุปลูกหนี้ อื่น (ในไฟล์นี้ก่อน แล้วค่อยไฟล์รายงานลูกหนี้) ----
+    sources = [] if pay_found else [(xl, s, Path(path_str).name) for s in _summary_sheets(xl) if s != profit_sheet]
+    if ar_path_str and not pay_found:
+        try:
+            xa = pd.ExcelFile(ar_path_str)
+            sources += [(xa, s, Path(ar_path_str).name) for s in _summary_sheets(xa)]
+        except Exception:
+            pass
+    for x, sheet, fname in sources:
+        h = _header_row(x, sheet, PAY_HEADER_HINTS)
+        if h is None:
+            continue
+        sd = x.parse(sheet, header=h)
+        sc = _col_map(sd)
+        pay = _frame(sd, sc)
+        has = pay[PAY_FIELDS].notna().any(axis=1) | pay["Aging"].ne("") | pay["Cls"].ne(3)
+        pay = pay[has].drop_duplicates("Name", keep="last").set_index("Name")
+        if pay.empty:
+            continue
+        out = out.set_index("Name")
+        for f in PAY_FIELDS:  # ค่าจากชีตสรุปลูกหนี้มาก่อน
+            out[f] = pay[f].reindex(out.index).combine_first(out[f])
+        aging = pay["Aging"].reindex(out.index).fillna("")
+        out["Aging"] = aging.where(aging.ne(""), out["Aging"])
+        cls = pay["Cls"].reindex(out.index)
+        out["Cls"] = cls.where(cls.notna() & cls.ne(3), out["Cls"]).fillna(3).astype(int)
+        out = out.reset_index()
+        pay_found = sorted(set(pay_found) | {k for k in PAY_KEYS if k in sc}, key=PAY_KEYS.index)
+        pay_src = f"{fname} › {sheet} (จับคู่ด้วยชื่อลูกหนี้)"
+        break
+
+    for i in range(5):
+        out[f"B{i}"] = out[f"B{i}"].fillna(0.0)
+    out = out.copy()
     if out["LateRate"].isna().all() and out["Bills"].notna().any():
         out["LateRate"] = out["LateBills"] / out["Bills"].where(out["Bills"] > 0)
     rate = out["LateRate"].dropna()
@@ -1421,9 +1491,26 @@ def load_customer_file(path_str: str, mtime_ns: int):
     out["LateAmt"] = out[["B1", "B2", "B3", "B4"]].sum(axis=1)
     out["LateAmtShare"] = out["LateAmt"] / out["Billed"].where(out["Billed"] > 0)
     out["AvgDelay"] = out["SumDelay"] / out["LateBills"].where(out["LateBills"] > 0)
-    beh = out.apply(_behavior, axis=1, result_type="expand")
-    out["Behavior"], out["BehColor"], out["Advice"] = beh[0], beh[1], beh[2]
-    return out.drop_duplicates("Name", keep="last").reset_index(drop=True)
+    out["HasPay"] = (out["Bills"].notna() | out["LateRate"].notna()
+                     | out[[f"B{i}" for i in range(5)]].sum(axis=1).gt(0))
+    rate = out["LateRate"]
+    rules = [
+        (out["B4"].gt(0) | out["Cls"].eq(2), "มีหนี้ช้าเกิน 90 วัน", C_BAD,
+         "ระงับเครดิต/ให้ชำระก่อนส่งของ และติดตามหนี้อย่างเข้มงวด"),
+        (~out["HasPay"] | rate.isna(), "ไม่มีข้อมูลการจ่าย", "#94A3B8", "—"),
+        (rate.eq(0), "จ่ายตรงเวลาเสมอ", C_GOOD, "ลูกค้าคุณภาพดี รักษาความสัมพันธ์และพิจารณาขยายงาน"),
+        (rate.le(0.25), "ส่วนใหญ่ตรงเวลา", C_OK, "ติดตามตามปกติ"),
+        (rate.le(0.5), "จ่ายช้าบางครั้ง", C_WARN, "โทรเตือนก่อนครบกำหนด"),
+    ]
+    out["Behavior"], out["BehColor"], out["Advice"] = (
+        "จ่ายช้าเป็นประจำ", C_BAD, "ทบทวนเครดิตเทอม หรือกำหนดเงื่อนไขการชำระที่เข้มขึ้น")
+    done = pd.Series(False, index=out.index)
+    for mask, label, color, advice in rules:
+        m = mask.fillna(False) & ~done
+        out.loc[m, "Behavior"], out.loc[m, "BehColor"], out.loc[m, "Advice"] = label, color, advice
+        done |= m
+    out = out.drop_duplicates("Name", keep="last").reset_index(drop=True)
+    return out, pay_found, pay_src, profit_sheet
 
 
 def _beh_badge(text, color) -> str:
@@ -1447,7 +1534,10 @@ def render_customer_overview():
     if path is None:
         return  # ยังไม่มีไฟล์ ไม่ต้องแสดงส่วนนี้
     try:
-        cu = load_customer_file(str(path), path.stat().st_mtime_ns)
+        ar_path = find_ar_report()
+        cu, pay_cols, pay_src, src_sheet = load_customer_file(
+            str(path), path.stat().st_mtime_ns,
+            str(ar_path) if ar_path else "", ar_path.stat().st_mtime_ns if ar_path else 0)
     except Exception as e:
         st.warning(f"อ่านไฟล์ {path.name} ไม่สำเร็จ: {e}")
         return
@@ -1458,21 +1548,39 @@ def render_customer_overview():
     st.markdown(CUST_CSS, unsafe_allow_html=True)
     with _card("do_customers"):
         st.markdown("#### ภาพรวมลูกค้า: รายได้ ต้นทุน กำไร × พฤติกรรมการจ่ายหนี้")
-        st.caption(f"ข้อมูลจากไฟล์ {path.name} (รายลูกค้า) · ตัวกรองด้านบนของหน้านี้ไม่มีผลกับส่วนนี้ · "
-                   "ต้นทุน = ต้นทุนที่ปันส่วนให้ลูกค้าในไฟล์")
+        st.caption(f"รายได้/ต้นทุน/กำไร จากไฟล์ {path.name} › {src_sheet}"
+                   + (f" · การจ่ายหนี้จาก {pay_src}" if pay_src else "")
+                   + " · ตัวกรองด้านบนของหน้านี้ไม่มีผลกับส่วนนี้")
+
+        n_all, n_pay = len(cu), int(cu["HasPay"].sum())
+        if n_pay == 0:
+            st.info(
+                f"ไฟล์นี้มีข้อมูลรายได้/ต้นทุน/กำไร {n_all:,} ราย แต่**ไม่มีข้อมูลการจ่ายหนี้**เลย "
+                + ("(ไม่พบชีต สรุปลูกหนี้ ทั้งในไฟล์นี้และไฟล์รายงานลูกหนี้)"
+                   if not pay_cols else f"(พบชีต {pay_src} แต่ชื่อลูกค้าจับคู่กับชื่อลูกหนี้ไม่ได้เลย)")
+                + " · ตอนนี้จึงแสดงเฉพาะส่วนกำไร"
+            )
+        only_pay = False
+        if 0 < n_pay < n_all:
+            only_pay = st.toggle(
+                f"แสดงเฉพาะลูกค้าที่มีข้อมูลการจ่ายหนี้ ({n_pay:,} จาก {n_all:,} ราย)", value=True,
+                key="do_cu_only_pay",
+                help="ลูกค้าที่ไม่มีข้อมูลลูกหนี้ มักเป็นลูกค้าเงินสด หรือชื่อจับคู่กับรายงานลูกหนี้ไม่ได้",
+            )
+        base_cu = cu[cu["HasPay"]] if only_pay else cu
 
         c1, c2, c3 = st.columns([1.2, 1.4, 2.4])
         with c1:
-            prods = sorted(p for p in cu["Product"].unique() if p)
+            prods = sorted(p for p in base_cu["Product"].unique() if p)
             pick_prod = st.multiselect("ประเภทสินค้าหลัก", prods, placeholder="ทั้งหมด",
                                        key=_wkey("do_cu_prod", prods))
         with c2:
             behs = [b for b in ["จ่ายตรงเวลาเสมอ", "ส่วนใหญ่ตรงเวลา", "จ่ายช้าบางครั้ง", "จ่ายช้าเป็นประจำ",
-                                "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"] if (cu["Behavior"] == b).any()]
+                                "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"] if (base_cu["Behavior"] == b).any()]
             pick_beh = st.multiselect("พฤติกรรมการจ่าย", behs, placeholder="ทั้งหมด", key=_wkey("do_cu_beh", behs))
         with c3:
             search = st.text_input("ค้นหาลูกค้า", placeholder="พิมพ์ชื่อบางส่วน", key="do_cu_search")
-        view = cu
+        view = base_cu
         if pick_prod:
             view = view[view["Product"].isin(pick_prod)]
         if pick_beh:
@@ -1484,8 +1592,9 @@ def render_customer_overview():
             return
 
         rev, cost, prof = view["Revenue"].sum(), view["Cost"].sum(), view["Profit"].sum()
-        on_time = (view["LateRate"] == 0).sum()
-        with_rate = view["LateRate"].notna().sum()
+        on_time = int((view["LateRate"] == 0).sum())
+        with_rate = int((view["LateRate"].notna() & view["HasPay"]).sum())
+        view_pay = bool(view["HasPay"].any())
         late_amt, billed = view["LateAmt"].sum(), view["Billed"].sum()
         loss_n = int((view["Profit"] < 0).sum())
         st.markdown(
@@ -1500,13 +1609,16 @@ def render_customer_overview():
             f'<div class="s">อัตรากำไร {fp(_div(prof, rev))}</div></div>'
             f'<div class="b"><div class="k">จ่ายตรงเวลาเสมอ</div>'
             f'<div class="v">{fp(_div(on_time, with_rate))}</div>'
-            f'<div class="s">ของลูกค้า · ยอดที่จ่ายช้า {fp(_div(late_amt, billed))} ของยอดวางบิล</div></div>'
-            '</div>',
+            + (f'<div class="s">จาก {with_rate:,} รายที่มีข้อมูล · ยอดที่จ่ายช้า {fp(_div(late_amt, billed))} ของยอดวางบิล</div></div>'
+               if view_pay else '<div class="s">ไม่มีข้อมูลการจ่ายหนี้</div></div>')
+            + '</div>',
             unsafe_allow_html=True,
         )
 
         # ---------- กราฟ กำไร × จ่ายช้า ----------
-        q = view[view["Margin"].notna() & view["LateRate"].notna() & (view["Revenue"] > 0)].copy()
+        q = view[view["Margin"].notna() & view["LateRate"].notna() & view["HasPay"] & (view["Revenue"] > 0)]
+        q_cut = len(q) > 3000
+        q = q.nlargest(3000, "Revenue").copy() if q_cut else q.copy()
         if not q.empty:
             p1, p2, _p3 = st.columns([1, 1, 2])
             overall_margin = _div(q["Profit"].sum(), q["Revenue"].sum())
@@ -1566,7 +1678,8 @@ def render_customer_overview():
                 unsafe_allow_html=True,
             )
             st.caption("วงกลม = ลูกค้า 1 ราย · วงใหญ่ = รายได้สูง · ชี้เมาส์เพื่อดูรายละเอียด · "
-                       "อัตรากำไรที่เกิน ±100% แสดงที่ขอบกราฟ")
+                       "อัตรากำไรที่เกิน ±100% แสดงที่ขอบกราฟ"
+                       + (" · แสดง 3,000 รายที่รายได้สูงสุด" if q_cut else ""))
 
         # ---------- ตารางลูกค้า ----------
         sort_map = {"รายได้สูงสุด": ("Revenue", False), "กำไรสูงสุด": ("Profit", False),
@@ -1581,8 +1694,9 @@ def render_customer_overview():
                                  key="do_cu_top")
         col, asc = sort_map[sort_label]
         tb = view.sort_values([col, "Revenue"], ascending=[asc, False], na_position="last")
-        head = ["#", "ลูกค้า", "สินค้าหลัก", "รายได้", "ต้นทุน", "กำไร", "อัตรากำไร", "บิล (ช้า/ทั้งหมด)",
-                "ช้าสูงสุด", "ยอดวางบิลตามความช้า", "ชั้นลูกหนี้", "พฤติกรรมการจ่าย"]
+        head = ["#", "ลูกค้า", "สินค้าหลัก", "รายได้", "ต้นทุน", "กำไร", "อัตรากำไร"]
+        if view_pay:
+            head += ["บิล (ช้า/ทั้งหมด)", "ช้าสูงสุด", "ยอดวางบิลตามความช้า", "ชั้นลูกหนี้", "พฤติกรรมการจ่าย"]
         body = []
         for i, r in enumerate(tb.head(top_n).to_dict("records"), 1):
             bills = "—" if pd.isna(r["Bills"]) else f'{int(r["LateBills"] or 0):,} / {int(r["Bills"]):,}'
@@ -1597,15 +1711,18 @@ def render_customer_overview():
                 f'<td class="tc-num tc-muted">{ff(r["Cost"])}</td>'
                 f'<td class="tc-num {sign_cls(r["Profit"])}">{ff(r["Profit"])}</td>'
                 f'<td class="tc-num {sign_cls(r["Margin"])}">{fp(r["Margin"])}</td>'
-                f'<td class="tc-num">{bills}</td>'
-                f'<td class="tc-num">{maxd}</td>'
-                f"<td>{_age_bar(r)}</td>"
-                f'<td>{_beh_badge(CLS_NAMES[ci], CLS_COLORS[ci])}</td>'
-                f'<td>{_beh_badge(r["Behavior"], r["BehColor"])}</td>'
-                "</tr>"
+                + ((f'<td class="tc-num">{bills}</td>'
+                    f'<td class="tc-num">{maxd}</td>'
+                    f"<td>{_age_bar(r)}</td>"
+                    + (f'<td>{_beh_badge(CLS_NAMES[ci], CLS_COLORS[ci])}</td>' if r["HasPay"]
+                       else '<td class="tc-muted">—</td>')
+                    + f'<td>{_beh_badge(r["Behavior"], r["BehColor"])}</td>') if view_pay else "")
+                + "</tr>"
             )
-        st.caption(f"แสดง {min(top_n, len(tb)):,} จาก {len(tb):,} ราย · แถบสี = สัดส่วนยอดวางบิลที่จ่าย "
-                   + " / ".join(f'<span style="color:{c}">■</span> {l}' for l, c in zip(AGE_LABELS, AGE_COLORS)),
+        st.caption(f"แสดง {min(top_n, len(tb)):,} จาก {len(tb):,} ราย"
+                   + ((" · แถบสี = สัดส่วนยอดวางบิลที่จ่าย "
+                       + " / ".join(f'<span style="color:{c}">■</span> {l}' for l, c in zip(AGE_LABELS, AGE_COLORS)))
+                      if view_pay else ""),
                    unsafe_allow_html=True)
         st.markdown(_table_html(head, body, right_cols={3, 4, 5, 6, 7, 8}, max_height=480), unsafe_allow_html=True)
         export = pd.DataFrame({
@@ -1621,8 +1738,9 @@ def render_customer_overview():
 
         # ---------- เจาะรายลูกค้า ----------
         st.markdown("##### เจาะรายลูกค้า")
-        opts = view.sort_values("Revenue", ascending=False)["Name"].tolist()
-        pick = st.selectbox("เลือกลูกค้า", opts, key=_wkey("do_cu_pick", opts))
+        opts = view.nlargest(1000, "Revenue")["Name"].tolist()
+        pick = st.selectbox("เลือกลูกค้า (รายได้สูงสุด 1,000 ราย · ใช้ช่องค้นหาด้านบนเพื่อหารายอื่น)", opts,
+                            key=_wkey("do_cu_pick", opts[:50]))
         r = view[view["Name"] == pick].iloc[0]
         rank = int((cu["Revenue"] > r["Revenue"]).sum()) + 1
         boxes = [
@@ -1656,10 +1774,12 @@ def render_customer_overview():
             if pd.notna(r["MaxDelay"]) and r["MaxDelay"] > 0:
                 story += f' ช้าสุด {int(r["MaxDelay"]):,} วัน'
         story += f' · พฤติกรรม: {_beh_badge(r["Behavior"], r["BehColor"])}'
-        story += f'<div class="cu-rec">👉 {esc(r["Advice"])}</div>'
+        if r["Advice"] != "—":
+            story += f'<div class="cu-rec">👉 {esc(r["Advice"])}</div>'
         st.markdown(f'<div class="cu-story">{story}</div>', unsafe_allow_html=True)
-        st.markdown(_age_bar(r), unsafe_allow_html=True)
-        st.caption("แถบสี = สัดส่วนยอดวางบิลของลูกค้ารายนี้ แยกตามความช้าในการจ่าย")
+        if r["HasPay"] and r["Billed"] > 0:
+            st.markdown(_age_bar(r), unsafe_allow_html=True)
+            st.caption("แถบสี = สัดส่วนยอดวางบิลของลูกค้ารายนี้ แยกตามความช้าในการจ่าย")
 
 
 def render_direction_overview_dashboard():
