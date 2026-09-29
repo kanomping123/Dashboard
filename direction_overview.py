@@ -113,6 +113,8 @@ EXTRA_CSS = """
 .do-kpi-grid .tc-kpi-icon { width:40px; height:40px; font-size:19px; border-radius:12px; }
 .do-kpi-grid .tc-kpi-value { font-size:22px; overflow:hidden; text-overflow:ellipsis; }
 .do-kpi-grid .tc-kpi-sub { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.do-kpi-grid .tc-kpi-sub.do-sub-wrap { white-space:normal; overflow:visible; line-height:1.45; }
+.do-sub-wrap b { color:#3E9E6A; }
 @media (max-width:1100px){ .do-kpi-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
 @media (max-width:640px){ .do-kpi-grid { grid-template-columns:1fr; } }
 .do-lf2 { display:flex; gap:14px; flex-wrap:wrap; margin-top:2px; }
@@ -695,7 +697,8 @@ def render_direction_overview_dashboard():
          f'<div><div class="tc-kpi-label">Load Factor</div><div class="do-lf2">'
          f'<span class="{on_w}">น้ำหนัก<b>{fp(tot["LF"])}</b></span>'
          f'<span class="{on_v}">ปริมาตร<b>{fp(tot["VLF"])}</b></span></div>'
-         f'<div class="tc-kpi-sub">ผ่านเกณฑ์ 75% {fp(tot["PassRate"])} ของเที่ยว · มีข้อมูล {fp(lf_cover)}</div>'
+         f'<div class="tc-kpi-sub do-sub-wrap">ผ่านเกณฑ์ 75%: <b>{fp(tot["PassRate"])}</b> ของเที่ยว'
+         f'<br>มีข้อมูล LF {fp(lf_cover)} ของเที่ยว</div>'
          f'</div></div>'),
         kpi("🛣️", "#FFF7E0", "ต้นทุนต่อตัน-กม.", fck(tot["CostTonKm"]), f'{tot["TonKm"]:,.0f} ตัน-กม.'),
         kpi("🅾️", "#FDE9EC", "เที่ยวเปล่า + รถว่างไปสาขา", fm(tot["LossCost"]),
