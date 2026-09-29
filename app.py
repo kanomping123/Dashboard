@@ -22,6 +22,8 @@ from empty_trip import render_empty_trip_dashboard as render_empty_trip_page
 from customer_profit import render_customer_profit_dashboard
 # [แก้ไข 1/2] หน้าลูกหนี้ใหม่ อยู่ในไฟล์ ar_dashboard.py
 from ar_dashboard import render_ar_dashboard as render_ar_page
+# หน้าภาพรวมรายทิศทาง (รายได้ ต้นทุน กำไร CM Load Factor) อยู่ในไฟล์ direction_overview.py
+from direction_overview import render_direction_overview_dashboard
 
 # =========================================================
 # PAGE CONFIG
@@ -3685,6 +3687,7 @@ EXPORT_SLUGS = {
     "👥 Customer Profitability": "customer_profit",
     "💳 AR & Collection": "ar_collection",
     "📊 Load Factor": "load_factor",
+    "🧭 ภาพรวมรายทิศทาง": "direction_overview",
 }
 
 
@@ -3774,6 +3777,11 @@ if page == "📊 Dashboard Summary":
             "title": "📦 Load Factor Dashboard",
             "subtitle": "วิเคราะห์การใช้ความสามารถในการบรรทุก (น้ำหนัก และ ปริมาตร) · ใช้ข้อมูลจริง เพื่อการจัดรถที่คุ้มค่า",
             "ready": not lf_df.empty,
+        },
+        "🧭 ภาพรวมรายทิศทาง": {
+            "title": "🧭 ภาพรวมรายทิศทาง",
+            "subtitle": "รายได้ · ต้นทุน · กำไร · CM · Load Factor ของแต่ละทิศทางในหน้าเดียว",
+            "ready": True,
         },
     }
 
@@ -3867,6 +3875,12 @@ if page == "📊 Dashboard Summary":
     # Route to each dashboard directly.
     # Do not use the old generic "ready" gate because it could stop the page
     # before the user can open a dashboard whose dataset is independent.
+    if dashboard_choice == "🧭 ภาพรวมรายทิศทาง":
+        # โค้ดหน้าภาพรวมรายทิศทาง อยู่ในไฟล์ direction_overview.py
+        render_direction_overview_dashboard()
+        finish_export()
+        st.stop()
+
     if dashboard_choice == "📊 Load Factor":
         # โค้ดหน้า Load Factor อยู่ในไฟล์ load_factor.py
         if lf_df.empty:
