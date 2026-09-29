@@ -1529,6 +1529,141 @@ def _age_bar(r) -> str:
     return f'<div class="cu-age">{parts}</div>'
 
 
+
+BEH_ORDER = ["จ่ายตรงเวลาเสมอ", "ส่วนใหญ่ตรงเวลา", "จ่ายช้าบางครั้ง", "จ่ายช้าเป็นประจำ",
+             "มีหนี้ช้าเกิน 90 วัน", "ไม่มีข้อมูลการจ่าย"]
+BEH_COLORS = {"จ่ายตรงเวลาเสมอ": C_GOOD, "ส่วนใหญ่ตรงเวลา": C_OK, "จ่ายช้าบางครั้ง": C_WARN,
+              "จ่ายช้าเป็นประจำ": "#E0566C", "มีหนี้ช้าเกิน 90 วัน": "#8C1C2B", "ไม่มีข้อมูลการจ่าย": "#CBD5E1"}
+
+
+def _short(name, n=14) -> str:
+    s = str(name)
+    return s if len(s) <= n else s[:n - 1] + "…"
+
+
+def _customer_charts(view: pd.DataFrame, view_pay: bool):
+    """กราฟสรุป 4 ภาพ: กำไรตามพฤติกรรม · ยอดวางบิลตามความช้า · 10 รายกำไรสูงสุด · สินค้าหลัก × พฤติกรรม"""
+    a, b = st.columns([1.25, 1], gap="medium")
+
+    # 1) รายได้-ต้นทุน-กำไร ตามพฤติกรรมการจ่าย
+    with a:
+        st.markdown("##### รายได้ ต้นทุน กำไร ตามพฤติกรรมการจ่าย")
+        g = (view.groupby("Behavior")
+             .agg(N=("Name", "size"), Rev=("Revenue", "sum"), Cost=("Cost", "sum"), Profit=("Profit", "sum"))
+             .reindex([x for x in BEH_ORDER if x in set(view["Behavior"])]))
+        if not view_pay:
+            g = g.drop(index="ไม่มีข้อมูลการจ่าย", errors="ignore")
+        if g.empty:
+            st.info("ไม่มีข้อมูลการจ่ายหนี้สำหรับแยกกลุ่ม")
+        else:
+            g["Margin"] = g["Profit"] / g["Rev"].where(g["Rev"] != 0)
+            labels = [f"{k}<br><span style='font-size:11px;color:#64748B'>{int(r.N):,} ราย</span>"
+                      for k, r in g.iterrows()]
+            fig = go.Figure()
+            for name, col, colr in (("รายได้", "Rev", C_REV), ("ต้นทุน", "Cost", C_COST), ("กำไร", "Profit", C_POS)):
+                fig.add_trace(go.Bar(name=name, x=labels, y=g[col], marker_color=colr,
+                                     hovertemplate=f"{name} ฿%{{y:,.0f}}<extra></extra>"))
+            fig.add_trace(go.Scatter(
+                name="อัตรากำไร", x=labels, y=g["Margin"] * 100, yaxis="y2", mode="lines+markers+text",
+                line=dict(color=C_DARK, width=2.5), marker=dict(size=8),
+                text=[f"{v * 100:.0f}%" if pd.notna(v) else "" for v in g["Margin"]], textposition="top center",
+                hovertemplate="อัตรากำไร %{y:.1f}%<extra></extra>",
+            ))
+            fig.update_layout(
+                barmode="group", height=360, margin=dict(l=10, r=10, t=20, b=10), bargap=0.25,
+                legend=dict(orientation="h", y=1.12, x=0),
+                yaxis=dict(title="บาท", tickformat=",.0f"),
+                yaxis2=dict(overlaying="y", side="right", ticksuffix="%", showgrid=False, rangemode="tozero"),
+                xaxis=dict(type="category"),
+            )
+            _style(fig)
+            st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+            st.caption("ดูว่ากลุ่มที่จ่ายช้า ยังทำกำไรคุ้มกับความเสี่ยงหรือไม่ · เส้น = อัตรากำไรของกลุ่ม")
+
+    # 2) ยอดวางบิลแยกตามความช้า
+    with b:
+        st.markdown("##### ยอดวางบิลแยกตามความช้าในการจ่าย")
+        amt = pd.Series([float(view[f"B{i}"].sum()) for i in range(5)], index=AGE_LABELS)
+        if amt.sum() <= 0:
+            st.info("ไม่มีข้อมูลยอดวางบิล")
+        else:
+            late_share = amt.iloc[1:].sum() / amt.sum()
+            fig = go.Figure(go.Pie(
+                labels=AGE_LABELS, values=amt.values, hole=0.62, sort=False,
+                marker=dict(colors=AGE_COLORS, line=dict(color="white", width=2)),
+                textinfo="percent", textposition="outside",
+                hovertemplate="%{label}<br>฿%{value:,.0f}<br>%{percent}<extra></extra>",
+            ))
+            fig.update_layout(
+                height=360, margin=dict(l=10, r=10, t=20, b=10),
+                legend=dict(orientation="h", y=-0.08, x=0, font=dict(size=11)),
+                annotations=[dict(text=f"<span style='font-size:11px;color:#64748B'>จ่ายช้า</span><br>"
+                                       f"<b style='font-size:20px;color:#C8102E'>{late_share * 100:.0f}%</b><br>"
+                                       f"<span style='font-size:11px;color:#64748B'>ของยอด {fm(amt.sum())}</span>",
+                                  x=0.5, y=0.5, showarrow=False)],
+            )
+            _style(fig)
+            st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+
+    c, d = st.columns([1, 1], gap="medium")
+
+    # 3) 10 ลูกค้ากำไรสูงสุด (สีตามพฤติกรรม)
+    with c:
+        mode = st.radio("10 ลูกค้า", ["กำไรสูงสุด", "ขาดทุน/กำไรต่ำสุด", "รายได้สูงสุด"], horizontal=True,
+                        key="do_cu_top10_mode")
+        col, asc = {"กำไรสูงสุด": ("Profit", False), "ขาดทุน/กำไรต่ำสุด": ("Profit", True),
+                    "รายได้สูงสุด": ("Revenue", False)}[mode]
+        top = view.sort_values(col, ascending=asc).head(10).iloc[::-1]
+        if top.empty:
+            st.info("ไม่มีข้อมูล")
+        else:
+            fig = go.Figure(go.Bar(
+                y=[_short(n) for n in top["Name"]], x=top[col], orientation="h",
+                marker_color=[BEH_COLORS.get(bh, "#CBD5E1") for bh in top["Behavior"]],
+                text=[f"  {fm(v)} · {fp(m)}" for v, m in zip(top[col], top["Margin"])],
+                textposition="outside", cliponaxis=False,
+                customdata=top[["Name", "Revenue", "Cost", "Profit", "Behavior"]].to_numpy(),
+                hovertemplate=("<b>%{customdata[0]}</b><br>รายได้ ฿%{customdata[1]:,.0f} · ต้นทุน ฿%{customdata[2]:,.0f}"
+                               "<br>กำไร ฿%{customdata[3]:,.0f}<br>%{customdata[4]}<extra></extra>"),
+            ))
+            span = float(top[col].abs().max()) or 1.0
+            lo = min(0.0, float(top[col].min())) * 1.35
+            fig.update_layout(
+                height=380, margin=dict(l=10, r=30, t=10, b=10), showlegend=False,
+                xaxis=dict(title="บาท", tickformat=",.0f", range=[lo, max(span, float(top[col].max())) * 1.45]),
+                yaxis=dict(automargin=True, tickfont=dict(size=11)),
+            )
+            _style(fig)
+            st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+            st.caption("สีแท่ง = พฤติกรรมการจ่าย · " + " · ".join(
+                f'<span style="color:{BEH_COLORS[x]}">■</span> {x}' for x in BEH_ORDER[:5]),
+                unsafe_allow_html=True)
+
+    # 4) สินค้าหลัก × พฤติกรรมการจ่าย
+    with d:
+        st.markdown("##### รายได้ตามสินค้าหลัก แยกพฤติกรรมการจ่าย")
+        pv = (view.assign(Product=view["Product"].replace("", "ไม่ระบุ"))
+              .pivot_table(index="Product", columns="Behavior", values="Revenue", aggfunc="sum", fill_value=0))
+        if pv.empty:
+            st.info("ไม่มีข้อมูลประเภทสินค้า")
+        else:
+            pv = pv.loc[pv.sum(axis=1).sort_values().index].tail(10)
+            fig = go.Figure()
+            for bh in BEH_ORDER:
+                if bh in pv.columns and pv[bh].sum() > 0:
+                    fig.add_trace(go.Bar(name=bh, y=pv.index, x=pv[bh], orientation="h",
+                                         marker_color=BEH_COLORS[bh],
+                                         hovertemplate=f"%{{y}}<br>{bh}: ฿%{{x:,.0f}}<extra></extra>"))
+            fig.update_layout(
+                barmode="stack", height=380 + 10 * max(0, len(pv) - 6), margin=dict(l=10, r=10, t=10, b=10),
+                legend=dict(orientation="h", y=-0.15, x=0, font=dict(size=11)),
+                xaxis=dict(title="รายได้ (บาท)", tickformat=",.0f"), yaxis=dict(automargin=True),
+            )
+            _style(fig)
+            st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+            st.caption("ดูว่าสินค้าประเภทไหน มีสัดส่วนลูกค้าที่จ่ายช้ามาก")
+
+
 def render_customer_overview():
     path = find_customer_file()
     if path is None:
@@ -1614,6 +1749,14 @@ def render_customer_overview():
             + '</div>',
             unsafe_allow_html=True,
         )
+
+        # ---------- กราฟสรุป ----------
+        try:
+            _customer_charts(view, view_pay)
+        except Exception as e:  # กราฟชุดนี้ผิดพลาด ไม่ให้กระทบส่วนอื่น
+            if getattr(type(e), "__module__", "").startswith("streamlit"):
+                raise
+            st.warning(f"กราฟสรุปลูกค้าแสดงไม่ได้ ({type(e).__name__}: {e})")
 
         # ---------- กราฟ กำไร × จ่ายช้า ----------
         q = view[view["Margin"].notna() & view["LateRate"].notna() & view["HasPay"] & (view["Revenue"] > 0)]
