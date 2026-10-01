@@ -104,6 +104,7 @@ PAGE_CSS = """
 }
 .lfx-table td { padding: 9px 14px; border-bottom: 1px solid #FBEFF1; color: #1E293B; white-space: nowrap; }
 .lfx-trunc { overflow: hidden; text-overflow: ellipsis; }
+.lfx-wrap { white-space: normal !important; min-width: 170px; line-height: 1.45; }
 .lfx-table tbody tr:nth-child(even) td { background: #FFFBFC; }
 .lfx-table tbody tr:hover td { background: #FFE8EC; }
 .lfx-num { text-align: right !important; font-variant-numeric: tabular-nums; }
@@ -346,9 +347,13 @@ def _level_table(filtered, by, label, top_rank):
             "_Capacity": "sum",
             "_VolumeAgg": "sum",
             "_VolumeCapacityAgg": "sum",
+            "_CPTK_W": "sum",
+            "_TK_W": "sum",
+            "_CPTK_Mean": "mean",
         })
         .reset_index()
     )
+    _add_cptk(t)
     t["LF_W"] = t["_Weight"].div(t["_Capacity"].replace(0, pd.NA))
     t["LF_V"] = t["_VolumeAgg"].div(t["_VolumeCapacityAgg"].replace(0, pd.NA))
     t = t.sort_values("Trip Key Unique", ascending=False).reset_index(drop=True)
@@ -816,15 +821,17 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                     f'<td class="lfx-trunc" title="{esc(name)}">{esc(name)}</td>'
                     f'<td class="lfx-num">{int(r["Trip Key Unique"]):,}</td>'
                     + prod + _lf_cell(r["LF_W"]) + _lf_cell(r["LF_V"])
+                    + (_cptk_cell(r["CPTK"]) if has_cptk else "")
                     + "</tr>"
                 )
+            head = ["#", label, "จำนวนเที่ยว"]
             if show_prod:
-                table = _table_html(["#", label, "จำนวนเที่ยว", "ประเภทสินค้าที่ขน", "LF น้ำหนัก", "LF ปริมาตร"],
-                                    body, right_cols={2, 4, 5}, max_height=400)
-            else:
-                table = _table_html(["#", label, "จำนวนเที่ยว", "LF น้ำหนัก", "LF ปริมาตร"], body,
-                                    right_cols={2, 3, 4}, max_height=400,
-                                    col_widths=["46px", None, "112px", "148px", "148px"])
+                head.append("ประเภทสินค้าที่ขน")
+            head += ["LF น้ำหนัก", "LF ปริมาตร"]
+            if has_cptk:
+                head.append("Cost/ton-km")
+            right = {2} | {i for i, h in enumerate(head) if h.startswith("LF") or h == "Cost/ton-km"}
+            table = _table_html(head, body, right_cols=right, max_height=400)
             st.markdown(table, unsafe_allow_html=True)
             st.caption(caption)
 
@@ -834,7 +841,8 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             "vehicle", "10 อันดับ ชนิดรถ (เรียงตามจำนวนเที่ยว)", "Trip Vehicle Model", "ชนิดรถ",
             "lf3_vehicle_filter",
             "LF = ผลรวม ÷ ผลรวมความจุ (ไม่ใช่ค่าเฉลี่ยรายเที่ยว) · เลือกชนิดรถเพื่อดูเฉพาะคัน"
-            + (" · ประเภทสินค้าที่ขน = 2 อันดับแรก พร้อม % ของเที่ยวที่ระบุสินค้า" if has_product else ""),
+            + (" · ประเภทสินค้าที่ขน = 2 อันดับแรก พร้อม % ของเที่ยวที่ระบุสินค้า" if has_product else "")
+            + (" · Cost/ton-km = ต้นทุนรวม ÷ ton-km รวมของชนิดรถนั้น" if has_cptk else ""),
         )
     with d2:
         with _card("route"):
@@ -872,19 +880,15 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 direction_raw = str(r["Trip Direction"]) or "ไม่ระบุ"
                 direction_txt = esc(direction_raw).replace(" → ", ARROW)
                 cells = [f'<td class="lfx-rank">{i}</td>',
-                         f'<td class="lfx-trunc" title="{esc(direction_raw)}">{direction_txt}</td>']
+                         f'<td class="lfx-wrap" title="{esc(direction_raw)}">{direction_txt}</td>']
                 if has_run_type:
                     cells.append(f'<td class="lfx-muted">{esc(str(r.get("Trip Run Type") or "ไม่ระบุ"))}</td>')
                 cells.append(f'<td class="lfx-num">{int(r["Trip Key Unique"]):,}</td>')
                 cells += [_lf_cell(r["LF_W"]), _lf_cell(r["LF_V"])]
                 body.append("<tr>" + "".join(cells) + "</tr>")
             right = {len(head) - 3, len(head) - 2, len(head) - 1}
-            col_widths = ["46px", None]
-            if has_run_type:
-                col_widths.append("100px")
-            col_widths += ["112px", "148px", "148px"]
             st.markdown(
-                _table_html(head, body, right_cols=right, max_height=400, col_widths=col_widths),
+                _table_html(head, body, right_cols=right, max_height=400),
                 unsafe_allow_html=True,
             )
             st.caption(
