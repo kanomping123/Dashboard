@@ -123,8 +123,9 @@ PAGE_CSS = """
 .lfx-dir-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lfx-dir b { color: #1E293B; font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
 .lfx-dir small { color: #94A3B8; font-size: 11.5px; text-align: right; font-variant-numeric: tabular-nums; }
-.lfx-dir-lf { grid-column: 2 / -1; display: flex; gap: 10px; font-size: 11.5px; color: #94A3B8;
+.lfx-dir-lf { grid-column: 2 / -1; display: flex; flex-wrap: wrap; gap: 2px 12px; font-size: 11.5px; color: #94A3B8;
               margin: -2px 0 4px 17px; }
+.lfx-dir-lf > span { white-space: nowrap; }
 .lfx-dir-lf b { color: #475569; font-weight: 700; }
 .lfx-badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 99px; }
 .lfx-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0; }
@@ -976,7 +977,6 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
         return (f'<span class="lfx-badge" style="background:{_tint(color, 0.7)};color:#3F2A2E">'
                 f'{esc(text)}</span>')
 
-    route_total = filtered.groupby("_LFRoute")["Trip Key Unique"].nunique()
     lf_key = {"น้ำหนัก": "LF_W", "ปริมาตร": "LF_V"}.get(group_metric, "LF_B")
 
     with _card("trips"):
@@ -987,15 +987,48 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             "(ผลรวม ÷ ผลรวมความจุ เฉพาะเที่ยวของทิศทางนั้น ไม่ปนกับทิศตรงข้าม) · "
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
         )
+
+        # ---------- ตัวเลือกเฉพาะการ์ดนี้: เลือกเส้นทาง + ขาขึ้น/ขาล่อง ----------
+        all_routes = (filtered.groupby("_LFRoute")["Trip Key Unique"]
+                      .nunique().sort_values(ascending=False))
+        route_pick_opts = all_routes.index.tolist()
+        s1, s2 = st.columns([2.6, 1], gap="medium")
+        with s1:
+            sel_routes = st.multiselect(
+                "เลือกเส้นทางที่ต้องการดู (ไม่เลือก = ทุกเส้นทาง)",
+                route_pick_opts,
+                format_func=lambda r: f"{r}  ({all_routes[r]:,} เที่ยว)",
+                key=_wkey("lf3_sum_routes", route_pick_opts),
+                placeholder="พิมพ์ค้นหา หรือเลือกได้หลายเส้นทาง",
+            )
+        sel_run = "ทั้งหมด"
+        with s2:
+            if has_run_type:
+                sel_run = st.selectbox("ขาขึ้น / ขาล่อง", ["ทั้งหมด", "ขาขึ้น", "ขาล่อง"],
+                                       key="lf3_sum_run")
+            else:
+                st.caption("ไฟล์ยังไม่มีคอลัมน์ เที่ยววิ่ง (Trip Run Type) จึงกรองขาขึ้น/ขาล่องไม่ได้")
+
+        sf = filtered
+        if sel_routes:
+            sf = sf[sf["_LFRoute"].isin(sel_routes)]
+        if has_run_type and sel_run != "ทั้งหมด":
+            sf = sf[sf["Trip Run Type"].astype(str).str.strip() == sel_run]
+
+        sf_trips = sf["Trip Key Unique"].nunique()
+        sf_by_group = sf.groupby("_LFGroup")["Trip Key Unique"].nunique().to_dict()
+        sf_check = int(sf.loc[sf[metric_col].apply(_is_check), "Trip Key Unique"].nunique())
+        route_total = sf.groupby("_LFRoute")["Trip Key Unique"].nunique()
+
         tab_labels = (
-            [f"ทั้งหมด ({trips:,})"]
-            + [f"{g} ({by_group.get(g, 0):,})" for g in ORDER]
-            + [f"ตรวจสอบข้อมูล (>100%) ({n_check:,})"]
+            [f"ทั้งหมด ({sf_trips:,})"]
+            + [f"{g} ({sf_by_group.get(g, 0):,})" for g in ORDER]
+            + [f"ตรวจสอบข้อมูล (>100%) ({sf_check:,})"]
         )
         tabs = st.tabs(tab_labels)
         for tab, grp in zip(tabs, [None] + ORDER + [CHECK_LABEL]):
             with tab:
-                x = filtered if grp is None else filtered[filtered["_LFGroup"] == grp]
+                x = sf if grp is None else sf[sf["_LFGroup"] == grp]
                 if x.empty:
                     st.info("ไม่มีเที่ยวในกลุ่มนี้")
                     continue
@@ -1052,9 +1085,9 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                         f'<div class="lfx-dir"><span class="lfx-dir-sw" style="background:{c}"></span>'
                         f'<span class="lfx-dir-name">{esc(str(d)).replace(" → ", ARROW)}</span>'
                         f'<b>{int(n):,}</b><small>{n / total_n * 100:.0f}%</small></div>'
-                        f'<div class="lfx-dir-lf">LF น้ำหนัก <b>{_fmt_pct(lfw)}</b>'
-                        f' &nbsp;·&nbsp; LF ปริมาตร <b>{_fmt_pct(lfv)}</b>'
-                        + (f' &nbsp;·&nbsp; Cost/ton-km <b>{_fmt_amount(cp, 2)}</b>' if has_cptk else "")
+                        f'<div class="lfx-dir-lf"><span>LF น้ำหนัก <b>{_fmt_pct(lfw)}</b></span>'
+                        f'<span>LF ปริมาตร <b>{_fmt_pct(lfv)}</b></span>'
+                        + (f'<span>Cost/ton-km <b>{_fmt_amount(cp, 2)}</b></span>' if has_cptk else "")
                         + '</div>'
                         for d, n, c, lfw, lfv, cp in zip(g["_LFDir"], g["n"], colors, g["LF_W"], g["LF_V"], g["CPTK"])
                     )
@@ -1148,7 +1181,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 key=_wkey("lf3_trip_route", route_opts),
             )
         if pick_route != "— เลือกเส้นทาง —":
-            x = filtered[filtered["_LFRoute"] == pick_route]
+            x = sf[sf["_LFRoute"] == pick_route]
             dir_opts = x["_LFDir"].value_counts().index.tolist()
             with r2:
                 pick_dir = st.selectbox("ทิศทางวิ่ง", ["ทั้งหมด"] + dir_opts,
@@ -1169,7 +1202,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             pick_dir_summary["LF_W"] = pick_dir_summary["_Weight"].div(pick_dir_summary["_Capacity"].replace(0, pd.NA))
             pick_dir_summary["LF_V"] = pick_dir_summary["_VolumeAgg"].div(pick_dir_summary["_VolumeCapacityAgg"].replace(0, pd.NA))
             summary_chips = "".join(
-                f'<span class="lfx-chip">{esc(str(row["_LFDir"])).replace(" → ", " → ")}: '
+                f'<span class="lfx-chip">{esc(str(row["_LFDir"]))}: '
                 f'{int(row["n"]):,} เที่ยว · LF น้ำหนัก {_fmt_pct(row["LF_W"])} · LF ปริมาตร {_fmt_pct(row["LF_V"])}</span>'
                 for _, row in pick_dir_summary.iterrows()
             )
