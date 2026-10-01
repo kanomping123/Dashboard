@@ -32,7 +32,7 @@ PLOT_CONFIG = {"displayModeBar": False}
 ORDER = ["≤25%", ">25–50%", ">50–75%", ">75–100%"]
 CHECK_LABEL = "ตรวจสอบข้อมูล (>100%)"
 BOTH = "ดูทั้งคู่"
-METRIC_COL = {"น้ำหนัก": "_WeightLF", "ปริมาตร": "_VolumeLF"}
+METRIC_COL = {"น้ำหนัก": "_WeightLF", "ปริมาตร": "_VolumeLF", "ดูทั้งคู่": "_BothLF"}
 STATUS_MAP = {g: g for g in ORDER}  # ใช้ช่วง % เป็นป้ายกำกับตรง ๆ ไม่ตีความเป็นระดับ
 GROUP_COLORS = {
     ORDER[0]: "#B9D6F2",
@@ -493,6 +493,12 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
     df["_LFRoute"], df["_LFDir"] = _lf_routes(df["Trip Loading"], df["Trip Unloading"])
 
     # ระดับเที่ยว: 1 แถว = 1 Trip Key ไม่ซ้ำ
+    # โหมดดูทั้งคู่: ใช้ค่าที่สูงกว่าระหว่าง LF น้ำหนักกับ LF ปริมาตร
+    # → ≤25% เมื่อต่ำกว่า 25% ทั้งคู่ · ช่วงอื่นถึงด้วยน้ำหนักหรือปริมาตรอย่างใดอย่างหนึ่งก็พอ
+    df["_BothLF"] = pd.concat(
+        [pd.to_numeric(df["_WeightLF"], errors="coerce").astype("float64"),
+         pd.to_numeric(df["_VolumeLF"], errors="coerce").astype("float64")], axis=1).max(axis=1)
+
     trip_df = (
         df[df["Trip Key Unique"].ne("")]
         .sort_index()
@@ -623,8 +629,9 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
 
     both = metric == BOTH
     shown = ["น้ำหนัก", "ปริมาตร"] if both else [metric]
-    group_metric = "น้ำหนัก" if both else metric            # ใช้แบ่งแท็บ/สถานะในตารางด้านล่าง
+    group_metric = metric                                  # ใช้แบ่งแท็บ/สถานะในตารางด้านล่าง
     metric_col = METRIC_COL[group_metric]
+    group_label = "น้ำหนักหรือปริมาตร (ค่าที่สูงกว่า)" if both else group_metric
     metric_label = "น้ำหนัก + ปริมาตร" if both else metric
 
     def _dist(col):
@@ -636,7 +643,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
         n_chk = int(filtered.loc[filtered[col].apply(_is_check), "Trip Key Unique"].nunique())
         return d, tot, n_chk
 
-    dists = {m: _dist(METRIC_COL[m]) for m in shown}
+    dists = {m: _dist(METRIC_COL[m]) for m in shown + ([BOTH] if both else [])}
 
     # ---------------- วิเคราะห์ Load Factor ----------------
     with _card("analysis"):
@@ -644,6 +651,9 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
         st.caption(
             "ช่วง ≤25%, >25–50%, >50–75% และ >75–100% ใช้สำหรับแสดงระดับการบรรทุกเทียบกับความสามารถของรถ · "
             "เปลี่ยนตัวชี้วัดได้ที่การ์ดอัตราการใช้ความจุด้านบน"
+            + (" · **รวม** = ≤25% เมื่อน้ำหนักและปริมาตรต่ำกว่า 25% ทั้งคู่ ส่วนช่วงอื่นใช้ค่าที่สูงกว่าระหว่างน้ำหนักกับปริมาตร "
+               "(ถึงช่วงนั้นด้วยอย่างใดอย่างหนึ่งก็นับ) · ตรวจสอบข้อมูล = น้ำหนักหรือปริมาตรเกิน 100% · "
+               "แท็บในตารางด้านล่างใช้ตัวเลข รวม" if both else "")
         )
         filtered["_LFGroup"] = filtered[metric_col].map(_group)
         dist, total, n_check = dists[group_metric]
@@ -655,8 +665,9 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 n = int(d.loc[d["_LFGroup"] == g, "Trips"].iloc[0])
                 return f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(GROUP_COLORS[g], TEXT)}">{n:,}</div>'
             parts = "".join(
-                f'<span>{m}<b>{int(dists[m][0].loc[dists[m][0]["_LFGroup"] == g, "Trips"].iloc[0]):,}</b></span>'
-                for m in shown
+                f'<span>{"รวม" if m == BOTH else m}'
+                f'<b>{int(dists[m][0].loc[dists[m][0]["_LFGroup"] == g, "Trips"].iloc[0]):,}</b></span>'
+                for m in shown + [BOTH]
             )
             return f'<div class="lfx-two" style="--c:{INS_TEXT.get(GROUP_COLORS[g], TEXT)}">{parts}</div>'
 
@@ -668,7 +679,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
         )
         if both:
             chk_val = ('<div class="lfx-two" style="--c:#D0505C">' + "".join(
-                f'<span>{m}<b>{dists[m][2]:,}</b></span>' for m in shown) + "</div>")
+                f'<span>{"รวม" if m == BOTH else m}<b>{dists[m][2]:,}</b></span>' for m in shown + [BOTH]) + "</div>")
         else:
             chk_val = (f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(CHECK_COLOR, TEXT)}">'
                        f'{dists[metric][2]:,}</div>')
@@ -891,7 +902,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 f'{esc(text)}</span>')
 
     with _card("trip_list"):
-        st.markdown(f"#### รายการเที่ยว (เลือกกลุ่มเพื่อดูรายละเอียดเป็นรายเที่ยว — แบ่งกลุ่มตาม{group_metric})")
+        st.markdown(f"#### รายการเที่ยว (เลือกกลุ่มเพื่อดูรายละเอียดเป็นรายเที่ยว — แบ่งกลุ่มตาม{group_label})")
         st.caption(
             "แต่ละแถว = 1 เที่ยว (Trip Key Unique ไม่ซ้ำ) · เลือกแท็บเพื่อกรองตามระดับการบรรทุก · "
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
@@ -930,7 +941,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                         + _lf_cell(r["_WeightLF"]) + _lf_cell(r["_VolumeLF"])
                         + f"<td>{trip_badge(s)}</td></tr>"
                     )
-                st.caption(f"{len(tx):,} เที่ยว · แสดงสูงสุด 300 เที่ยว (เรียงตาม LF {group_metric} มากไปน้อย)")
+                st.caption(f"{len(tx):,} เที่ยว · แสดงสูงสุด 300 เที่ยว (เรียงตาม LF {group_label} มากไปน้อย)")
                 st.markdown(
                     _table_html(
                         ["วันที่", "เลขที่เที่ยว", "ทิศทางการวิ่ง", "ชนิดรถ",
@@ -966,13 +977,13 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 f'{esc(text)}</span>')
 
     route_total = filtered.groupby("_LFRoute")["Trip Key Unique"].nunique()
-    lf_key = "LF_W" if group_metric == "น้ำหนัก" else "LF_V"
+    lf_key = {"น้ำหนัก": "LF_W", "ปริมาตร": "LF_V"}.get(group_metric, "LF_B")
 
     with _card("trips"):
-        st.markdown(f"#### สรุปรวมรายเส้นทาง (ไม่ใช่รายเที่ยว — แบ่งกลุ่มตาม{group_metric})")
+        st.markdown(f"#### สรุปรวมรายเส้นทาง (ไม่ใช่รายเที่ยว — แบ่งกลุ่มตาม{group_label})")
         st.caption(
             "เส้นทางจาก Loading ↔ Unloading (วิ่งสลับทิศนับเป็นเส้นทางเดียวกัน) · "
-            f"แบ่งกลุ่มเที่ยวตาม{group_metric} · LF ของแต่ละทิศทางคำนวณแยกจากกัน "
+            f"แบ่งกลุ่มเที่ยวตาม{group_label} · LF ของแต่ละทิศทางคำนวณแยกจากกัน "
             "(ผลรวม ÷ ผลรวมความจุ เฉพาะเที่ยวของทิศทางนั้น ไม่ปนกับทิศตรงข้าม) · "
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
         )
@@ -1002,6 +1013,8 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 _add_cptk(rs)
                 rs["LF_W"] = rs["_Weight"].div(rs["_Capacity"].replace(0, pd.NA))
                 rs["LF_V"] = rs["_VolumeAgg"].div(rs["_VolumeCapacityAgg"].replace(0, pd.NA))
+                rs["LF_B"] = pd.concat([pd.to_numeric(rs["LF_W"], errors="coerce"),
+                                        pd.to_numeric(rs["LF_V"], errors="coerce")], axis=1).max(axis=1)
                 rs["Share"] = rs["Trips"] / rs["_LFRoute"].map(route_total) * 100
                 rs = rs.sort_values("Trips", ascending=False).reset_index(drop=True)
                 outlier_routes = set(x.loc[x["_VolumeOutlier"], "_LFRoute"])
