@@ -390,13 +390,6 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
         kpi("💰", "#FFF0E6", "ต้นทุนสูญเสียรวม", _money(total_loss),
             f"เฉลี่ย {_money(total_loss / n_routes if n_routes else 0)} ต่อรายการ · {total_trips:,} เที่ยว"),
     ]
-    if has_price:
-        prices = valid["Price"].dropna()
-        cards.append(kpi(
-            "⚠️", "#FDE9EC", "เที่ยวที่ต้นทุนเฉลี่ยเกินราคา", f"{len(over):,} รายการ",
-            "",
-            "#C23B53" if len(over) else "#0F172A",
-        ))
     st.markdown('<div class="tc-kpi-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
 
     # ---------------- ข้อสังเกตสำคัญ ----------------
@@ -431,7 +424,7 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
         if not over.empty:
             worst = over.loc[over["Diff"].idxmax()]
             cells.append((
-                "#C23B53", "⚠️", "ต้นทุนเฉลี่ยเกินราคามากที่สุด" + (" (≥5 เที่ยว)" if not over_reliable.empty else ""),
+                "#C23B53", "⚠️", "ต้นทุนเฉลี่ยต่อเที่ยว",
                 "+" + _money_full(worst["Diff"]),
                 worst["_Route"],
                 f'<div class="tc-ins-line"><span class="tc-sw" style="background:{TRIP_COLORS[EMPTY]}"></span>'
