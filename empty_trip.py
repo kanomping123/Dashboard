@@ -394,7 +394,7 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
         prices = valid["Price"].dropna()
         cards.append(kpi(
             "⚠️", "#FDE9EC", "เที่ยวที่ต้นทุนเฉลี่ยเกินราคา", f"{len(over):,} รายการ",
-            f"จาก {int(prices.size):,} รายการที่มีราคา · เทียบต้นทุนเฉลี่ยต่อเที่ยวตามตัวกรอง",
+            "",
             "#C23B53" if len(over) else "#0F172A",
         ))
     st.markdown('<div class="tc-kpi-grid">' + "".join(cards) + "</div>", unsafe_allow_html=True)
@@ -435,9 +435,7 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
                 "+" + _money_full(worst["Diff"]),
                 worst["_Route"],
                 f'<div class="tc-ins-line"><span class="tc-sw" style="background:{TRIP_COLORS[EMPTY]}"></span>'
-                f'<span>ต้นทุนเฉลี่ยต่อเที่ยว</span><b>{_money_full(worst["AvgActual"])}</b></div>'
-                f'<div class="tc-ins-sub">{int(worst["TripsAll"]):,} เที่ยว · เกินราคา '
-                f'{worst["Diff"] / worst["Price"] * 100:.0f}%</div>',
+                f'<span>ต้นทุนเฉลี่ยต่อเที่ยว</span><b>{_money_full(worst["AvgActual"])}</b></div>',
             ))
         elif has_price:
             top_price = valid.loc[valid["Price"].idxmax()]
