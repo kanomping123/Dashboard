@@ -31,6 +31,8 @@ PLOT_CONFIG = {"displayModeBar": False}
 # (ห้ามใช้ป้าย Low/Medium/High และห้ามสรุปว่า "เกินความสามารถ" / "ผิดปกติ" / "Outlier")
 ORDER = ["≤25%", ">25–50%", ">50–75%", ">75–100%"]
 CHECK_LABEL = "ตรวจสอบข้อมูล (>100%)"
+BOTH = "ดูทั้งคู่"
+METRIC_COL = {"น้ำหนัก": "_WeightLF", "ปริมาตร": "_VolumeLF"}
 STATUS_MAP = {g: g for g in ORDER}  # ใช้ช่วง % เป็นป้ายกำกับตรง ๆ ไม่ตีความเป็นระดับ
 GROUP_COLORS = {
     ORDER[0]: "#B9D6F2",
@@ -135,6 +137,15 @@ PAGE_CSS = """
 .lfx-prod-cell { white-space: normal !important; min-width: 190px; }
 .lfx-prod { display: flex; justify-content: space-between; gap: 10px; font-size: 12.5px; color: #475569; line-height: 1.55; }
 .lfx-prod small { color: #94A3B8; font-variant-numeric: tabular-nums; }
+
+.lfx-two { display: flex; gap: 14px; margin-top: 2px; }
+.lfx-two span { font-size: 11px; color: #94A3B8; font-weight: 600; }
+.lfx-two b { display: block; font-size: 19px; font-weight: 800; color: var(--c); line-height: 1.2;
+             font-variant-numeric: tabular-nums; }
+.lfx-leg-row.lfx-leg2 { grid-template-columns: 12px minmax(0, 1fr) 96px 96px; }
+.lfx-leg2 .lfx-leg-val small { color: #94A3B8; font-size: 11px; }
+.lfx-leg-head { font-size: 11.5px; color: #94A3B8; font-weight: 700; border-bottom: 1px solid #F4E4E7 !important; }
+.lfx-leg-head span:nth-child(n+3) { text-align: right; }
 
 @media (max-width: 1100px) {
   .lfx-kpi-grid.sub { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -433,6 +444,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
     df["_VolumeAgg"] = df["_Volume"].where(~df["_VolumeOutlier"], 0.0)
     df["_VolumeCapacityAgg"] = df["_VolumeCapacity"].where(~df["_VolumeOutlier"], 0.0)
 
+
     # ---------------- ต้นทุนต่อตัน-กม. (ใช้เมื่อไฟล์มีคอลัมน์ระยะทาง / Total Cost) ----------------
     def _opt_num(col):
         if col in df.columns:
@@ -579,69 +591,92 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             f'<div class="lfx-kpi-sub">{esc(sub)}</div>{meter}</div></div>'
         )
 
+    vol_sub = (f"ไม่นับ {n_outlier:,} เที่ยวที่ Volume LF > 150%" if n_outlier
+               else "ปริมาตรรวม ÷ ความจุปริมาตรรวม")
     with _card("kpi"):
-        k1, k2 = st.columns([1, 1.8], gap="large")
+        k1, k2 = st.columns([1, 2.4], gap="large")
         with k1:
             st.markdown(
                 kpi("🚚", "#FFE8EC", "จำนวนเที่ยวทั้งหมด", f"{trips:,}", "เที่ยว (นับ Trip Key ไม่ซ้ำ)"),
                 unsafe_allow_html=True,
             )
         with k2:
-            v1, v2 = st.columns([1.6, 1])
-            with v2:
+            v1, v2, v3 = st.columns([1.3, 1.3, 1])
+            with v3:
                 metric = st.selectbox(
-                    "ตัวชี้วัด (ใช้กับทั้งหน้า)", ["น้ำหนัก", "ปริมาตร"], key="lf3_metric_sel",
+                    "ตัวชี้วัด (ใช้กับทั้งหน้า)", [BOTH, "น้ำหนัก", "ปริมาตร"], key="lf3_metric_sel3",
+                    help="ดูทั้งคู่ = แสดงน้ำหนักและปริมาตรคู่กันในการ์ด กราฟ และสัดส่วน "
+                         "(แท็บรายการเที่ยว/เส้นทางแบ่งกลุ่มตามน้ำหนัก)",
                 )
-            if metric == "น้ำหนัก":
-                lf_value, icon, bg = wlf, "⚖️", "#FFF0E6"
-                sub = "น้ำหนักรวม ÷ ความจุน้ำหนักรวม"
+            w_card = kpi("⚖️", "#FFF0E6", "อัตราการใช้ความจุ (น้ำหนัก)", _fmt_pct(wlf),
+                         "น้ำหนักรวม ÷ ความจุน้ำหนักรวม", wlf)
+            v_card = kpi("📦", "#E6F4FA", "อัตราการใช้ความจุ (ปริมาตร)",
+                         _fmt_pct(vlf) if vlf is not None else "—", vol_sub, vlf)
+            if metric == BOTH:
+                with v1:
+                    st.markdown(w_card, unsafe_allow_html=True)
+                with v2:
+                    st.markdown(v_card, unsafe_allow_html=True)
             else:
-                lf_value, icon, bg = vlf, "📦", "#E6F4FA"
-                sub = (f"ไม่นับ {n_outlier:,} เที่ยวที่ Volume LF > 150%" if n_outlier
-                       else "ปริมาตรรวม ÷ ความจุปริมาตรรวม")
-            with v1:
-                st.markdown(
-                    kpi(icon, bg, f"อัตราการใช้ความจุ ({metric})",
-                        _fmt_pct(lf_value) if lf_value is not None else "—", sub, lf_value),
-                    unsafe_allow_html=True,
-                )
-    metric_col = "_WeightLF" if metric == "น้ำหนัก" else "_VolumeLF"
+                with v1:
+                    st.markdown(w_card if metric == "น้ำหนัก" else v_card, unsafe_allow_html=True)
+
+    both = metric == BOTH
+    shown = ["น้ำหนัก", "ปริมาตร"] if both else [metric]
+    group_metric = "น้ำหนัก" if both else metric            # ใช้แบ่งแท็บ/สถานะในตารางด้านล่าง
+    metric_col = METRIC_COL[group_metric]
+    metric_label = "น้ำหนัก + ปริมาตร" if both else metric
+
+    def _dist(col):
+        g = filtered[col].map(_group)
+        d = (filtered.assign(_g=g).groupby("_g")["Trip Key Unique"].nunique()
+             .reindex(ORDER, fill_value=0).reset_index(name="Trips").rename(columns={"_g": "_LFGroup"}))
+        tot = int(d["Trips"].sum())
+        d["Pct"] = d["Trips"] / tot * 100 if tot else 0.0
+        n_chk = int(filtered.loc[filtered[col].apply(_is_check), "Trip Key Unique"].nunique())
+        return d, tot, n_chk
+
+    dists = {m: _dist(METRIC_COL[m]) for m in shown}
 
     # ---------------- วิเคราะห์ Load Factor ----------------
     with _card("analysis"):
-        st.markdown(f"#### วิเคราะห์ Load Factor ({metric})")
+        st.markdown(f"#### วิเคราะห์ Load Factor ({metric_label})")
         st.caption(
             "ช่วง ≤25%, >25–50%, >50–75% และ >75–100% ใช้สำหรับแสดงระดับการบรรทุกเทียบกับความสามารถของรถ · "
             "เปลี่ยนตัวชี้วัดได้ที่การ์ดอัตราการใช้ความจุด้านบน"
         )
         filtered["_LFGroup"] = filtered[metric_col].map(_group)
-        # 4 ช่วงหลัก (≤100%) เท่านั้น — >100% จะไม่ถูกนับรวมในกราฟ/สัดส่วนนี้
-        dist = (
-            filtered.groupby("_LFGroup")["Trip Key Unique"].nunique()
-            .reindex(ORDER, fill_value=0).reset_index(name="Trips")
-        )
-        total = int(dist["Trips"].sum())
-        dist["Pct"] = dist["Trips"] / total * 100 if total else 0.0
+        dist, total, n_check = dists[group_metric]
         by_group = dict(zip(dist["_LFGroup"], dist["Trips"]))
 
-        # รายการที่ต้องตรวจสอบ: Load Factor ของตัวชี้วัดที่เลือก > 100% (เก็บค่าจริงไว้ ไม่ cap ไม่ลบ)
-        check_mask = filtered[metric_col].apply(_is_check)
-        n_check = int(filtered.loc[check_mask, "Trip Key Unique"].nunique())
+        def _val(g):
+            if not both:
+                d = dists[metric][0]
+                n = int(d.loc[d["_LFGroup"] == g, "Trips"].iloc[0])
+                return f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(GROUP_COLORS[g], TEXT)}">{n:,}</div>'
+            parts = "".join(
+                f'<span>{m}<b>{int(dists[m][0].loc[dists[m][0]["_LFGroup"] == g, "Trips"].iloc[0]):,}</b></span>'
+                for m in shown
+            )
+            return f'<div class="lfx-two" style="--c:{INS_TEXT.get(GROUP_COLORS[g], TEXT)}">{parts}</div>'
 
-        # กล่องสรุป 4 ช่วงหลัก + การ์ดแยกสำหรับรายการที่ต้องตรวจสอบ
         main_cards = "".join(
             f'<div class="lfx-kpi sub-card"><div class="lfx-kpi-icon" style="background:{_tint(GROUP_COLORS[g])}">📊</div>'
-            f'<div class="lfx-kpi-body"><div class="lfx-kpi-label">{esc(g)}</div>'
-            f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(GROUP_COLORS[g], TEXT)}">{by_group.get(g, 0):,}</div>'
+            f'<div class="lfx-kpi-body"><div class="lfx-kpi-label">{esc(g)}</div>{_val(g)}'
             f'<div class="lfx-kpi-sub">เที่ยว</div></div></div>'
             for g in ORDER
         )
+        if both:
+            chk_val = ('<div class="lfx-two" style="--c:#D0505C">' + "".join(
+                f'<span>{m}<b>{dists[m][2]:,}</b></span>' for m in shown) + "</div>")
+        else:
+            chk_val = (f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(CHECK_COLOR, TEXT)}">'
+                       f'{dists[metric][2]:,}</div>')
         check_card = (
             '<div class="lfx-kpi sub-card check">'
             f'<div class="lfx-kpi-icon" style="background:{_tint(CHECK_COLOR)}">🔎</div>'
             '<div class="lfx-kpi-body"><div class="lfx-kpi-label">LF &gt; 100% — ตรวจสอบข้อมูล</div>'
-            f'<div class="lfx-kpi-value" style="color:{INS_TEXT.get(CHECK_COLOR, TEXT)}">{n_check:,}</div>'
-            '<div class="lfx-kpi-sub">เที่ยว · แยกจาก 4 ช่วงหลัก</div></div></div>'
+            f'{chk_val}<div class="lfx-kpi-sub">เที่ยว · แยกจาก 4 ช่วงหลัก</div></div></div>'
         )
         st.markdown(
             f'<div class="lfx-kpi-grid sub">{main_cards}</div>'
@@ -658,59 +693,92 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
     a, b = st.columns([1.35, 1], gap="medium")
     with a:
         with _card("dist"):
-            st.markdown(f"#### การกระจายของอัตราการใช้ความจุ ({metric})")
-            st.caption("จำนวนเที่ยวในแต่ละช่วง (รายเที่ยว)")
-            fig = go.Figure(go.Bar(
-                x=dist["_LFGroup"], y=dist["Trips"],
-                marker_color=[GROUP_COLORS[g] for g in dist["_LFGroup"]],
-                text=[f"{int(n):,}<br>({p:.1f}%)" for n, p in zip(dist["Trips"], dist["Pct"])],
-                textposition="outside", cliponaxis=False,
-                textfont=dict(color="#334155", size=12),
-                hovertemplate="%{x}<br>%{y:,} เที่ยว<extra></extra>",
-            ))
-            y_max = float(dist["Trips"].max() or 1)
+            st.markdown(f"#### การกระจายของอัตราการใช้ความจุ ({metric_label})")
+            st.caption("จำนวนเที่ยวในแต่ละช่วง (รายเที่ยว)"
+                       + (" · แท่งทึบ = น้ำหนัก · แท่งลายเส้น = ปริมาตร" if both else ""))
+            fig = go.Figure()
+            y_max = 1.0
+            for m in shown:
+                d = dists[m][0]
+                y_max = max(y_max, float(d["Trips"].max() or 1))
+                fig.add_trace(go.Bar(
+                    name=m, x=d["_LFGroup"], y=d["Trips"],
+                    marker=dict(color=[GROUP_COLORS[g] for g in d["_LFGroup"]],
+                                pattern=dict(shape="/" if (both and m == "ปริมาตร") else "",
+                                             fgcolor="white", size=7, solidity=0.35),
+                                line=dict(color="white", width=1)),
+                    text=[f"{int(n):,}<br>({p:.1f}%)" for n, p in zip(d["Trips"], d["Pct"])],
+                    textposition="outside", cliponaxis=False,
+                    textfont=dict(color="#334155", size=11 if both else 12),
+                    hovertemplate=f"{m} · %{{x}}<br>%{{y:,}} เที่ยว<extra></extra>",
+                ))
             fig.update_layout(
-                height=360, margin=dict(l=10, r=10, t=30, b=30), showlegend=False, bargap=0.35,
-                xaxis=dict(title=f"อัตราการใช้ความจุ ({metric})"),
-                yaxis=dict(title="จำนวนเที่ยว", tickformat=",", range=[0, y_max * 1.25]),
+                height=360, margin=dict(l=10, r=10, t=30, b=30), showlegend=both, bargap=0.3,
+                barmode="group", bargroupgap=0.08, legend=dict(orientation="h", y=1.12, x=0),
+                xaxis=dict(title=f"อัตราการใช้ความจุ ({metric_label})"),
+                yaxis=dict(title="จำนวนเที่ยว", tickformat=",", range=[0, y_max * 1.3]),
             )
             _style(fig)
             st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
 
+    def _donut(m, height):
+        d, tot, _ = dists[m]
+        fig = go.Figure(go.Pie(
+            labels=[STATUS_MAP[g] for g in d["_LFGroup"]], values=d["Trips"],
+            hole=0.64, sort=False, direction="clockwise",
+            marker=dict(colors=[GROUP_COLORS[g] for g in d["_LFGroup"]], line=dict(color="white", width=3)),
+            text=[f"{p:.0f}%" if p >= 6 else "" for p in d["Pct"]],
+            textinfo="text", textposition="inside",
+            insidetextfont=dict(color="#3F2A2E", size=12, family=FONT),
+            hovertemplate=f"{m} · %{{label}}<br>%{{value:,}} เที่ยว<br>%{{percent}}<extra></extra>",
+        ))
+        fig.update_layout(
+            height=height, showlegend=False, margin=dict(l=0, r=0, t=10, b=0),
+            annotations=[dict(
+                text=f"<span style='font-size:12px;color:{MUTED}'>{m}</span>"
+                     f"<br><b style='font-size:17px;color:{TEXT}'>{tot:,}</b>",
+                x=0.5, y=0.5, showarrow=False,
+            )],
+        )
+        _style(fig)
+        st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
+
     with b:
         with _card("share"):
-            st.markdown(f"#### สัดส่วนกลุ่มการใช้งาน ({metric})")
-            p1, p2 = st.columns([1, 1.25], gap="small")
-            with p1:
-                fig = go.Figure(go.Pie(
-                    labels=[STATUS_MAP[g] for g in dist["_LFGroup"]], values=dist["Trips"],
-                    hole=0.64, sort=False, direction="clockwise",
-                    marker=dict(colors=[GROUP_COLORS[g] for g in dist["_LFGroup"]],
-                                line=dict(color="white", width=3)),
-                    text=[f"{p:.0f}%" if p >= 6 else "" for p in dist["Pct"]],
-                    textinfo="text", textposition="inside",
-                    insidetextfont=dict(color="#3F2A2E", size=12, family=FONT),
-                    hovertemplate="%{label}<br>%{value:,} เที่ยว<br>%{percent}<extra></extra>",
-                ))
-                fig.update_layout(
-                    height=280, showlegend=False, margin=dict(l=0, r=0, t=10, b=0),
-                    annotations=[dict(
-                        text=f"<span style='font-size:12px;color:{MUTED}'>เที่ยวทั้งหมด</span>"
-                             f"<br><b style='font-size:19px;color:{TEXT}'>{total:,}</b>",
-                        x=0.5, y=0.5, showarrow=False,
-                    )],
-                )
-                _style(fig)
-                st.plotly_chart(fig, width="stretch", config=PLOT_CONFIG)
-            with p2:
-                rows = "".join(
-                    f'<div class="lfx-leg-row"><span class="lfx-sw" style="background:{GROUP_COLORS[g]}"></span>'
-                    f'<span class="lfx-leg-name">{esc(g)}<small>ระดับการบรรทุกเทียบกับความสามารถของรถ</small></span>'
-                    f'<span class="lfx-leg-val">{int(n):,}</span>'
-                    f'<span class="lfx-leg-pct">{p:.1f}%</span></div>'
-                    for g, n, p in zip(dist["_LFGroup"], dist["Trips"], dist["Pct"])
+            st.markdown(f"#### สัดส่วนกลุ่มการใช้งาน ({metric_label})")
+            if both:
+                c1, c2 = st.columns(2, gap="small")
+                with c1:
+                    _donut("น้ำหนัก", 220)
+                with c2:
+                    _donut("ปริมาตร", 220)
+                dw, dv = dists["น้ำหนัก"][0], dists["ปริมาตร"][0]
+                rows = (
+                    '<div class="lfx-leg-row lfx-leg2 lfx-leg-head"><span></span><span>ช่วง</span>'
+                    '<span>น้ำหนัก</span><span>ปริมาตร</span></div>'
+                    + "".join(
+                        f'<div class="lfx-leg-row lfx-leg2"><span class="lfx-sw" style="background:{GROUP_COLORS[g]}"></span>'
+                        f'<span class="lfx-leg-name">{esc(g)}</span>'
+                        f'<span class="lfx-leg-val">{int(nw):,} <small>({pw:.1f}%)</small></span>'
+                        f'<span class="lfx-leg-val">{int(nv):,} <small>({pv:.1f}%)</small></span></div>'
+                        for g, nw, pw, nv, pv in zip(dw["_LFGroup"], dw["Trips"], dw["Pct"], dv["Trips"], dv["Pct"])
+                    )
                 )
                 st.markdown(f'<div class="lfx-legend">{rows}</div>', unsafe_allow_html=True)
+            else:
+                p1, p2 = st.columns([1, 1.25], gap="small")
+                with p1:
+                    _donut(metric, 280)
+                with p2:
+                    d = dists[metric][0]
+                    rows = "".join(
+                        f'<div class="lfx-leg-row"><span class="lfx-sw" style="background:{GROUP_COLORS[g]}"></span>'
+                        f'<span class="lfx-leg-name">{esc(g)}<small>ระดับการบรรทุกเทียบกับความสามารถของรถ</small></span>'
+                        f'<span class="lfx-leg-val">{int(n):,}</span>'
+                        f'<span class="lfx-leg-pct">{p:.1f}%</span></div>'
+                        for g, n, p in zip(d["_LFGroup"], d["Trips"], d["Pct"])
+                    )
+                    st.markdown(f'<div class="lfx-legend">{rows}</div>', unsafe_allow_html=True)
 
     # ---------------- ตารางชนิดรถ / เส้นทาง ----------------
     def level_card(name, title, by, label, key_base, caption):
@@ -823,7 +891,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 f'{esc(text)}</span>')
 
     with _card("trip_list"):
-        st.markdown(f"#### รายการเที่ยว (เลือกกลุ่มเพื่อดูรายละเอียดเป็นรายเที่ยว — {metric})")
+        st.markdown(f"#### รายการเที่ยว (เลือกกลุ่มเพื่อดูรายละเอียดเป็นรายเที่ยว — แบ่งกลุ่มตาม{group_metric})")
         st.caption(
             "แต่ละแถว = 1 เที่ยว (Trip Key Unique ไม่ซ้ำ) · เลือกแท็บเพื่อกรองตามระดับการบรรทุก · "
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
@@ -862,7 +930,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                         + _lf_cell(r["_WeightLF"]) + _lf_cell(r["_VolumeLF"])
                         + f"<td>{trip_badge(s)}</td></tr>"
                     )
-                st.caption(f"{len(tx):,} เที่ยว · แสดงสูงสุด 300 เที่ยว (เรียงตาม LF {metric} มากไปน้อย)")
+                st.caption(f"{len(tx):,} เที่ยว · แสดงสูงสุด 300 เที่ยว (เรียงตาม LF {group_metric} มากไปน้อย)")
                 st.markdown(
                     _table_html(
                         ["วันที่", "เลขที่เที่ยว", "ทิศทางการวิ่ง", "ชนิดรถ",
@@ -898,13 +966,13 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 f'{esc(text)}</span>')
 
     route_total = filtered.groupby("_LFRoute")["Trip Key Unique"].nunique()
-    lf_key = "LF_W" if metric == "น้ำหนัก" else "LF_V"
+    lf_key = "LF_W" if group_metric == "น้ำหนัก" else "LF_V"
 
     with _card("trips"):
-        st.markdown(f"#### สรุปรวมรายเส้นทาง (ไม่ใช่รายเที่ยว — {metric})")
+        st.markdown(f"#### สรุปรวมรายเส้นทาง (ไม่ใช่รายเที่ยว — แบ่งกลุ่มตาม{group_metric})")
         st.caption(
             "เส้นทางจาก Loading ↔ Unloading (วิ่งสลับทิศนับเป็นเส้นทางเดียวกัน) · "
-            f"แบ่งกลุ่มเที่ยวตาม{metric} · LF ของแต่ละทิศทางคำนวณแยกจากกัน "
+            f"แบ่งกลุ่มเที่ยวตาม{group_metric} · LF ของแต่ละทิศทางคำนวณแยกจากกัน "
             "(ผลรวม ÷ ผลรวมความจุ เฉพาะเที่ยวของทิศทางนั้น ไม่ปนกับทิศตรงข้าม) · "
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
         )
@@ -994,7 +1062,7 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                     if pd.notna(lf_v):
                         g_lf = _group(lf_v)
                         status = "ตรวจสอบข้อมูล" if g_lf == CHECK_LABEL else g_lf
-                    elif metric == "ปริมาตร" and r["_LFRoute"] in outlier_routes:
+                    elif group_metric == "ปริมาตร" and r["_LFRoute"] in outlier_routes:
                         status = "ตรวจสอบข้อมูล"   # มีแต่เที่ยว Volume LF > 150% จึงไม่มี LF รวม
                     else:
                         status = "ไม่ระบุ"
