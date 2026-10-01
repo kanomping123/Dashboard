@@ -988,10 +988,11 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
             "แท็บ \"ตรวจสอบข้อมูล\" เป็นรายการสำหรับตรวจสอบ ไม่ใช่ระดับการบรรทุกหลัก"
         )
 
-        # ---------- ตัวเลือกเฉพาะการ์ดนี้: เลือกเส้นทาง + ขาขึ้น/ขาล่อง ----------
+        # ---------- ตัวเลือกเฉพาะการ์ดนี้: เลือกเส้นทาง + ขาขึ้น/ขาล่อง (แยกรายเส้นทาง) ----------
         all_routes = (filtered.groupby("_LFRoute")["Trip Key Unique"]
                       .nunique().sort_values(ascending=False))
         route_pick_opts = all_routes.index.tolist()
+        RUN_OPTS = ["ทั้งหมด", "ขาขึ้น", "ขาล่อง"]
         s1, s2 = st.columns([2.6, 1], gap="medium")
         with s1:
             sel_routes = st.multiselect(
@@ -1001,19 +1002,41 @@ def render_load_factor_dashboard(raw_load_factor_df, source_labels=None):
                 key=_wkey("lf3_sum_routes", route_pick_opts),
                 placeholder="พิมพ์ค้นหา หรือเลือกได้หลายเส้นทาง",
             )
-        sel_run = "ทั้งหมด"
+        sel_run = "ทั้งหมด"      # ใช้เมื่อไม่ได้เลือกเส้นทาง (กรองทุกเส้นทางพร้อมกัน)
+        route_run = {}           # {เส้นทาง: ขาขึ้น/ขาล่อง/ทั้งหมด} ใช้เมื่อเลือกเส้นทาง
         with s2:
-            if has_run_type:
-                sel_run = st.selectbox("ขาขึ้น / ขาล่อง", ["ทั้งหมด", "ขาขึ้น", "ขาล่อง"],
-                                       key="lf3_sum_run")
-            else:
+            if not has_run_type:
                 st.caption("ไฟล์ยังไม่มีคอลัมน์ เที่ยววิ่ง (Trip Run Type) จึงกรองขาขึ้น/ขาล่องไม่ได้")
+            elif not sel_routes:
+                sel_run = st.selectbox("ขาขึ้น / ขาล่อง", RUN_OPTS, key="lf3_sum_run")
+            else:
+                st.markdown("<div style='height:1.75rem'></div>", unsafe_allow_html=True)
+                st.caption("เลือกขาขึ้น / ขาล่อง แยกแต่ละเส้นทางด้านล่าง")
 
+        # ตัวเลือกขาขึ้น/ขาล่อง แยกรายเส้นทาง (สูงสุด 3 คอลัมน์ต่อแถว)
+        if has_run_type and sel_routes:
+            run_cols = st.columns(min(len(sel_routes), 3), gap="medium")
+            for i, r in enumerate(sel_routes):
+                with run_cols[i % len(run_cols)]:
+                    route_run[r] = st.radio(
+                        r, RUN_OPTS, horizontal=True,
+                        key="lf3_sum_run_" + hashlib.md5(r.encode("utf-8")).hexdigest()[:10],
+                    )
+
+        run_col = (filtered["Trip Run Type"].astype(str).str.strip()
+                   if has_run_type else pd.Series("", index=filtered.index))
         sf = filtered
         if sel_routes:
-            sf = sf[sf["_LFRoute"].isin(sel_routes)]
-        if has_run_type and sel_run != "ทั้งหมด":
-            sf = sf[sf["Trip Run Type"].astype(str).str.strip() == sel_run]
+            sel_mask = pd.Series(False, index=filtered.index)
+            for r in sel_routes:
+                m = filtered["_LFRoute"] == r
+                d = route_run.get(r, "ทั้งหมด")
+                if d != "ทั้งหมด":
+                    m &= run_col == d
+                sel_mask |= m
+            sf = filtered[sel_mask]
+        elif sel_run != "ทั้งหมด":
+            sf = filtered[run_col == sel_run]
 
         sf_trips = sf["Trip Key Unique"].nunique()
         sf_by_group = sf.groupby("_LFGroup")["Trip Key Unique"].nunique().to_dict()
