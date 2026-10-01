@@ -418,19 +418,11 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
             )
             return f'<div class="tc-mini-bar">{bar}</div>{lines}'
 
-        def price_line(row):
-            if pd.isna(row["Price"]):
-                return ""
-            return (
-                f'<div class="tc-ins-line"><span class="tc-sw" style="background:{PRICE_COLOR}"></span>'
-                f'<span>ราคาต่อเส้นทาง</span><b>{_money_full(row["Price"])}</b></div>'
-            )
-
         cells = [
             ("#E0566C", "💸", "เที่ยวที่สูญเสียมากที่สุด", _money(top_loss["CostAll"]),
-             top_loss["_Route"], split_html(top_loss, "Cost") + price_line(top_loss)),
+             top_loss["_Route"], split_html(top_loss, "Cost")),
             ("#D0588A", "🔁", "เที่ยวที่เกิดบ่อยที่สุด", f'{int(top_freq["TripsAll"]):,} เที่ยว',
-             top_freq["_Route"], split_html(top_freq, "Trips") + price_line(top_freq)),
+             top_freq["_Route"], split_html(top_freq, "Trips")),
         ]
         # ใช้รายการที่วิ่งอย่างน้อย 5 เที่ยว เพื่อไม่ให้รายการ 1–2 เที่ยวดึงค่าเฉลี่ยจนดูผิดปกติ
         over_reliable = over[over["TripsAll"] >= 5]
@@ -444,9 +436,8 @@ def render_empty_trip_dashboard(raw_df: pd.DataFrame):
                 worst["_Route"],
                 f'<div class="tc-ins-line"><span class="tc-sw" style="background:{TRIP_COLORS[EMPTY]}"></span>'
                 f'<span>ต้นทุนเฉลี่ยต่อเที่ยว</span><b>{_money_full(worst["AvgActual"])}</b></div>'
-                + price_line(worst)
-                + f'<div class="tc-ins-sub">{int(worst["TripsAll"]):,} เที่ยว · เกินราคา '
-                  f'{worst["Diff"] / worst["Price"] * 100:.0f}%</div>',
+                f'<div class="tc-ins-sub">{int(worst["TripsAll"]):,} เที่ยว · เกินราคา '
+                f'{worst["Diff"] / worst["Price"] * 100:.0f}%</div>',
             ))
         elif has_price:
             top_price = valid.loc[valid["Price"].idxmax()]
